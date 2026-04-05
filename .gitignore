@@ -1,0 +1,67 @@
+# Byte-compiled / caches
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# Packaging / build
+build/
+dist/
+*.egg-info/
+*.egg
+pip-wheel-metadata/
+wheels/
+
+# Testing & coverage
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+
+# Type checker / linters (if added later)
+.dmypy.json
+dmypy.json
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Environment & secrets
+.env
+.env.*
+!.env.example
+
+# IDE / editor (uncomment if you don't share team settings)
+# .vscode/
+# .idea/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Project: eval outputs (logs, xlsx, temp mono wavs, verbose_json)
+eval_runs/
+
+# Logs
+*.log
+
+# torch / huggingface-style caches if ever created under repo
+.cache/
+
+# audio
+test_audio_cc2/
+eval_runs/
+
+# neuroslop
+review*.md
