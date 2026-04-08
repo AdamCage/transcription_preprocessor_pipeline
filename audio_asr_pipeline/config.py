@@ -9,13 +9,16 @@ from pydantic import BaseModel, Field, model_validator
 
 CoarseBackendName = Literal["whole_file", "ina"]
 VADBackendName = Literal["silero"]
+STTBackendName = Literal["httpx", "openai"]
 
 # Shared default so eval and PipelineConfig stay aligned
 DEFAULT_COARSE_SEGMENTER_BACKEND: CoarseBackendName = "ina"
 
 
 class VLLMTranscribeConfig(BaseModel):
+    stt_backend: STTBackendName = "openai"
     base_url: str = "http://127.0.0.1:8000"
+    api_key: str | None = None
     model: str = "large-v3-turbo"
     language: str | None = None
     temperature: float | None = None
@@ -72,7 +75,7 @@ class PipelineConfig(BaseModel):
     vllm: VLLMTranscribeConfig = Field(default_factory=VLLMTranscribeConfig)
 
     max_concurrent_files: int = 3
-    max_concurrent_chunks: int = 3
+    max_concurrent_chunks: int = 8
     max_in_flight_requests: int = 8
 
     fail_fast: bool = False

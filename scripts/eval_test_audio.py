@@ -3,11 +3,15 @@ Benchmark: preprocess test_audio WAVs, transcribe chunks via OpenAI-compatible S
 then save verbose_json + XLSX (WER/CER, timings, RT metrics). Эталонные .txt необязательны:
 без них колонки те же (WER/CER и эталон пустые, расхождения — «нет эталона»).
 
-Requires: uv sync --extra eval
+Requires: uv sync (устанавливает все зависимости, включая jiwer, openpyxl, ina).
 STT server assumed at --base-url (e.g. vLLM Whisper).
 
 Example:
   uv run python scripts/eval_test_audio.py --audio-dir test_audio --base-url http://127.0.0.1:8000
+  # С авторизацией vLLM:
+  uv run python scripts/eval_test_audio.py --audio-dir test_audio --base-url http://127.0.0.1:8000 --api-key sk-xxx
+  # Через httpx (raw POST) вместо openai клиента:
+  uv run python scripts/eval_test_audio.py --stt-backend httpx --audio-dir test_audio --base-url http://127.0.0.1:8000
   # Стерео call-center: канал 0 = call_from, канал 1 = call_to; эталоны {stem}_call_from.txt и {stem}_call_to.txt
   uv run python scripts/eval_test_audio.py --stereo-call --audio-dir stereo_wavs --base-url http://127.0.0.1:8000
   # Лог по умолчанию: eval_runs/<UTC_timestamp>/eval.log рядом с report.xlsx
@@ -39,6 +43,7 @@ import numpy as np
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
+from tqdm import tqdm
 
 from audio_asr_pipeline.config import (
     DEFAULT_COARSE_SEGMENTER_BACKEND,
@@ -436,6 +441,8 @@ async def _run_stereo(
     async def process_path(p: Path) -> PipelineResult:
         return await pipeline.process_file(p)
 
+    pbar = tqdm(total=len(wavs), desc="Processing stereo WAVs", unit="file")
+
     async def one_stereo(wav: Path):
         t0 = time.perf_counter()
         log.info("eval stereo start | path=%s", wav.resolve())
@@ -443,12 +450,14 @@ async def _run_stereo(
             y, loaded_sr = librosa.load(str(wav), sr=sr, mono=False)
         except Exception as e:  # noqa: BLE001
             log.exception("stereo load failed | %s", wav)
+            pbar.update(1)
             return (wav, e, None, None, 0.0)
 
         if y.ndim == 1:
             dur_guess = float(len(y) / loaded_sr) if y.size else 0.0
             err = ValueError("expected stereo (2 channels) for --stereo-call")
             log.warning("%s: %s", wav.name, err)
+            pbar.update(1)
             return (wav, err, None, None, dur_guess)
 
         try:
@@ -456,6 +465,7 @@ async def _run_stereo(
         except Exception as e:  # noqa: BLE001
             dur_guess = float(max(y.shape) / loaded_sr) if y.size else 0.0
             log.warning("%s: not usable as stereo for --stereo-call: %s", wav.name, e)
+            pbar.update(1)
             return (wav, e, None, None, dur_guess)
 
         duration_sec = float(n_samples / loaded_sr)
@@ -467,9 +477,11 @@ async def _run_stereo(
         res_from, res_to = await asyncio.gather(process_path(p_from), process_path(p_to))
         wall_s = time.perf_counter() - t0
         log.info("eval stereo done | file=%s | wall_s=%.3f", wav.name, wall_s)
+        pbar.update(1)
         return (wav, None, res_from, res_to, duration_sec)
 
     results = await asyncio.gather(*[one_stereo(w) for w in wavs])
+    pbar.close()
 
     log.info("Building workbook stereo (%d rows)…", len(wavs))
     wb = Workbook()
@@ -597,18 +609,28 @@ async def _run_stereo(
         wer_f = wer_t = wer_o = cer_f = cer_t = cer_o = None
         hyp_nf = _normalize_for_metrics(hyp_f)
         hyp_nt = _normalize_for_metrics(hyp_t)
-        if ref_f.strip() and hyp_nf:
+        if ref_f.strip():
             rf = _normalize_for_metrics(ref_f)
-            if rf:
+            if rf and hyp_nf:
                 wer_f = float(jiwer.wer(rf, hyp_nf))
                 cer_f = float(jiwer.cer(rf, hyp_nf))
                 summary_wer_from.append(wer_f)
                 summary_cer_from.append(cer_f)
-        if ref_t.strip() and hyp_nt:
+            elif rf:
+                wer_f = 1.0
+                cer_f = 1.0
+                summary_wer_from.append(wer_f)
+                summary_cer_from.append(cer_f)
+        if ref_t.strip():
             rt = _normalize_for_metrics(ref_t)
-            if rt:
+            if rt and hyp_nt:
                 wer_t = float(jiwer.wer(rt, hyp_nt))
                 cer_t = float(jiwer.cer(rt, hyp_nt))
+                summary_wer_to.append(wer_t)
+                summary_cer_to.append(cer_t)
+            elif rt:
+                wer_t = 1.0
+                cer_t = 1.0
                 summary_wer_to.append(wer_t)
                 summary_cer_to.append(cer_t)
         ref_join = _join_stereo_texts(ref_f, ref_t)
@@ -616,9 +638,14 @@ async def _run_stereo(
         if ref_join.strip():
             rj = _normalize_for_metrics(ref_join)
             hj = _normalize_for_metrics(hyp_join)
-            if rj:
+            if rj and hj:
                 wer_o = float(jiwer.wer(rj, hj))
                 cer_o = float(jiwer.cer(rj, hj))
+                summary_wer_overall.append(wer_o)
+                summary_cer_overall.append(cer_o)
+            elif rj:
+                wer_o = 1.0
+                cer_o = 1.0
                 summary_wer_overall.append(wer_o)
                 summary_cer_overall.append(cer_o)
 
@@ -832,7 +859,9 @@ async def _run(args: argparse.Namespace, out_root: Path) -> int:
         coarse_segmenter_backend=args.coarse_backend,  # type: ignore[arg-type]
         ina_force_cpu=not args.ina_allow_gpu,
         vllm=VLLMTranscribeConfig(
+            stt_backend=args.stt_backend,
             base_url=args.base_url.rstrip("/"),
+            api_key=args.api_key,
             model=args.model,
             language=args.language,
             trust_env=args.trust_env,
@@ -840,9 +869,10 @@ async def _run(args: argparse.Namespace, out_root: Path) -> int:
     )
     log.info("pipeline_config | %s", cfg.model_dump(mode="json"))
     log.info(
-        "STT %s | model=%s | file_concurrency=%s (each file: preprocess then STT, no batch preprocess phase) | trust_env=%s",
+        "STT %s | model=%s | stt_backend=%s | file_concurrency=%d | trust_env=%s",
         f"{args.base_url.rstrip('/')}/v1/audio/transcriptions",
         args.model,
+        args.stt_backend,
         args.concurrency,
         args.trust_env,
     )
@@ -850,6 +880,8 @@ async def _run(args: argparse.Namespace, out_root: Path) -> int:
 
     if args.stereo_call:
         return await _run_stereo(args, out_root, wavs, verbose_dir, pipeline, jiwer, cfg)
+
+    pbar = tqdm(total=len(wavs), desc="Processing WAVs", unit="file")
 
     async def one_wav(p: Path):
         t_wall0 = time.perf_counter()
@@ -861,6 +893,7 @@ async def _run(args: argparse.Namespace, out_root: Path) -> int:
                 "Processing FAILED (row will be in xlsx with error): %s",
                 p.resolve(),
             )
+            pbar.update(1)
             return e
         wall_s = time.perf_counter() - t_wall0
         if result.error:
@@ -878,9 +911,11 @@ async def _run(args: argparse.Namespace, out_root: Path) -> int:
                 len(result.text or ""),
                 result.stats.get("transcription_sec"),
             )
+        pbar.update(1)
         return result
 
     results = await asyncio.gather(*[one_wav(w) for w in wavs])
+    pbar.close()
 
     for wav, res in zip(wavs, results, strict=True):
         if isinstance(res, Exception):
@@ -953,11 +988,16 @@ async def _run(args: argparse.Namespace, out_root: Path) -> int:
                 json.dumps(res.verbose_json, ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
-            if ref and hyp_norm:
+            if ref:
                 ref_n = _normalize_for_metrics(ref)
-                if ref_n:
+                if ref_n and hyp_norm:
                     wer_v = float(jiwer.wer(ref_n, hyp_norm))
                     cer_v = float(jiwer.cer(ref_n, hyp_norm))
+                    summary_wer.append(wer_v)
+                    summary_cer.append(cer_v)
+                elif ref_n:
+                    wer_v = 1.0
+                    cer_v = 1.0
                     summary_wer.append(wer_v)
                     summary_cer.append(cer_v)
 
@@ -1130,6 +1170,20 @@ def main() -> None:
             "Stereo WAV: channel 0 = call_from, channel 1 = call_to; run pipeline per "
             "channel; refs {stem}_call_from.txt / {stem}_call_to.txt"
         ),
+    )
+    p.add_argument(
+        "--stt-backend",
+        choices=("httpx", "openai"),
+        default="openai",
+        help=(
+            "STT client backend: openai (recommended for vLLM, handles auth and retries natively) "
+            "or httpx (raw multipart POST). Default: openai."
+        ),
+    )
+    p.add_argument(
+        "--api-key",
+        default=None,
+        help="API key for STT server (sent as Authorization: Bearer). Required by some vLLM deployments.",
     )
     args = p.parse_args()
     out_root = _resolve_out_root(args)

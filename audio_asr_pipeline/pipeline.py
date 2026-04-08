@@ -26,7 +26,11 @@ from audio_asr_pipeline.models import (
     TranscribedChunk,
 )
 from audio_asr_pipeline.preprocess import preprocess_audio
-from audio_asr_pipeline.transcribe import VLLMTranscriptionClient
+from audio_asr_pipeline.transcribe import (
+    OpenAITranscriptionClient,
+    VLLMTranscriptionClient,
+    create_stt_client,
+)
 
 log = logging.getLogger(__name__)
 
@@ -97,7 +101,8 @@ class AudioTranscriptionPipeline:
         executor: Executor | None = None,
     ) -> None:
         self.config = config
-        self._client = VLLMTranscriptionClient(config.vllm)
+        self._client = create_stt_client(config.vllm)
+        self._use_httpx_backend = config.vllm.stt_backend == "httpx"
         self._file_sem = asyncio.Semaphore(config.max_concurrent_files)
         self._global_stt_sem = asyncio.Semaphore(config.max_in_flight_requests)
         if executor is None:
@@ -110,6 +115,14 @@ class AudioTranscriptionPipeline:
             self._owns_executor = False
         self._http_client: httpx.AsyncClient | None = None
         self._http_lock = asyncio.Lock()
+        log.info(
+            "pipeline init | stt_backend=%s | max_concurrent_files=%d | "
+            "max_concurrent_chunks=%d | max_in_flight_requests=%d",
+            config.vllm.stt_backend,
+            config.max_concurrent_files,
+            config.max_concurrent_chunks,
+            config.max_in_flight_requests,
+        )
 
     async def _ensure_http_client(self) -> httpx.AsyncClient:
         if self._http_client is not None:
@@ -117,11 +130,16 @@ class AudioTranscriptionPipeline:
         async with self._http_lock:
             if self._http_client is None:
                 vcfg = self.config.vllm
+                cfg = self.config
                 self._http_client = httpx.AsyncClient(
                     base_url=vcfg.base_url.rstrip("/"),
                     timeout=httpx.Timeout(
                         vcfg.request_timeout_sec,
                         connect=vcfg.connect_timeout_sec,
+                    ),
+                    limits=httpx.Limits(
+                        max_connections=max(100, cfg.max_in_flight_requests * 2),
+                        max_keepalive_connections=max(20, cfg.max_in_flight_requests),
                     ),
                     trust_env=vcfg.trust_env,
                 )
@@ -132,11 +150,13 @@ class AudioTranscriptionPipeline:
         if self._http_client is not None:
             await self._http_client.aclose()
             self._http_client = None
+        await self._client.aclose()
         if self._owns_executor:
             self._executor.shutdown(wait=True)
 
     async def __aenter__(self) -> AudioTranscriptionPipeline:
-        await self._ensure_http_client()
+        if self._use_httpx_backend:
+            await self._ensure_http_client()
         return self
 
     async def __aexit__(
@@ -211,8 +231,12 @@ class AudioTranscriptionPipeline:
         return await asyncio.gather(*tasks)
 
     async def _guard_file(self, path: Path, sem: asyncio.Semaphore) -> PipelineResult:
+        log.debug("pipeline | file=%s | stage=waiting_file_sem", path.name)
         async with sem:
-            return await self._process_one(path)
+            log.debug("pipeline | file=%s | stage=acquired_file_sem", path.name)
+            result = await self._process_one(path)
+            log.debug("pipeline | file=%s | stage=released_file_sem", path.name)
+            return result
 
     def _result_failed(
         self,
@@ -276,10 +300,12 @@ class AudioTranscriptionPipeline:
 
         tfid = task.file_id
         log.info(
-            "pipeline | file_id=%s | stage=transcribe_start | num_chunks=%d | concurrency_cap=%d",
+            "pipeline | file_id=%s | stage=transcribe_start | num_chunks=%d | "
+            "global_inflight_cap=%d | stt_backend=%s",
             tfid,
             len(chunks),
-            min(self.config.max_concurrent_chunks, self.config.max_in_flight_requests),
+            self.config.max_in_flight_requests,
+            self.config.vllm.stt_backend,
         )
         try:
             t_tr0 = time.perf_counter()
@@ -345,27 +371,33 @@ class AudioTranscriptionPipeline:
         chunks: list[AudioChunk],
     ) -> list[TranscribedChunk]:
         cfg = self.config
-        chunk_sem = asyncio.Semaphore(
-            min(cfg.max_concurrent_chunks, cfg.max_in_flight_requests)
-        )
-        http = await self._ensure_http_client()
+        http: httpx.AsyncClient | None = None
+        if self._use_httpx_backend:
+            http = await self._ensure_http_client()
 
         async def one(ch: AudioChunk) -> TranscribedChunk | None:
             async with self._global_stt_sem:
-                async with chunk_sem:
-                    try:
+                log.debug(
+                    "pipeline | chunk=%s | stage=stt_send | file_id=%s",
+                    ch.chunk_id,
+                    ch.file_id,
+                )
+                try:
+                    if http is not None:
                         resp = await self._client.transcribe_chunk(ch, client=http)
-                        return TranscribedChunk(
-                            chunk_id=ch.chunk_id,
-                            file_id=ch.file_id,
-                            start_offset=ch.start,
-                            end_offset=ch.end,
-                            response=resp,
-                        )
-                    except TranscriptionRequestError:
-                        if cfg.skip_failed_chunks:
-                            return None
-                        raise
+                    else:
+                        resp = await self._client.transcribe_chunk(ch)
+                    return TranscribedChunk(
+                        chunk_id=ch.chunk_id,
+                        file_id=ch.file_id,
+                        start_offset=ch.start,
+                        end_offset=ch.end,
+                        response=resp,
+                    )
+                except TranscriptionRequestError:
+                    if cfg.skip_failed_chunks:
+                        return None
+                    raise
 
         results: list[TranscribedChunk | None] = await asyncio.gather(*[one(c) for c in chunks])
         out = [r for r in results if r is not None]

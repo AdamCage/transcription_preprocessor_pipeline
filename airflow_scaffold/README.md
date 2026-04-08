@@ -29,6 +29,8 @@ RUN pip install /opt/audio-asr-pipeline
 |-----|------------|
 | Variable `asr_stt_base_url` | URL OpenAI-совместимого STT (например `http://vllm-whisper:8000`). |
 | Connection `asr_stt` (опционально, тип HTTP) | Если задан, базовый URL собирается из соединения (`host`, `port`, схема); иначе используется переменная выше. |
+| Variable `asr_stt_api_key` | API-ключ для STT (Authorization: Bearer). Пусто / не задан = без авторизации. |
+| Variable `asr_stt_backend` | `openai` (рекомендуется для vLLM) или `httpx` (raw multipart POST). По умолчанию `openai`. |
 | Variable `asr_wav_paths_json` | JSON-массив путей к **стерео** WAV (DAG `asr_stereo_callcenter`). |
 | Variable `asr_mono_wav_paths_json` | JSON-массив путей к **моно** WAV (DAG `asr_mono`). В проде список можно отдавать из XCom/S3 вместо Variable. |
 | Variable `asr_stereo_work_dir` | Каталог для временных mono WAV при стерео (должен быть доступен воркеру). По умолчанию `/tmp/asr_stereo_work`. |

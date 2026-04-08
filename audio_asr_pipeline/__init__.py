@@ -1,6 +1,6 @@
 """Audio preprocessing and OpenAI-compatible chunked STT pipeline."""
 
-from audio_asr_pipeline.config import PipelineConfig, VLLMTranscribeConfig
+from audio_asr_pipeline.config import PipelineConfig, STTBackendName, VLLMTranscribeConfig
 from audio_asr_pipeline.errors import (
     AudioAsrPipelineError,
     AudioLoadError,
@@ -40,6 +40,7 @@ __all__ = [
     "MergeError",
     "PipelineConfig",
     "PipelineResult",
+    "STTBackendName",
     "SegmentationError",
     "TimeSpan",
     "TranscribedChunk",

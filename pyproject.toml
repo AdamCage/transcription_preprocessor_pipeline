@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "httpx>=0.27.0",
+    "openai>=1.0.0",
     "pydantic>=2.5.0",
     "numpy>=1.26.0",
     "soundfile>=0.12.1",
@@ -14,10 +15,16 @@ dependencies = [
     "torchaudio>=2.1.0",
     # Silero VAD JIT can raise TorchScript NYI on some PyTorch+Windows builds; ONNX backend avoids that.
     "onnxruntime>=1.16.0",
+    "tqdm>=4.60.0",
 ]
 
 [project.optional-dependencies]
-# ina: optional stack for default coarse segmenter (see [tool.uv] override-dependencies on Windows).
+# Keep extras for pip install compatibility (pip install .[eval], pip install .[ina]).
+eval = ["jiwer>=3.0.0", "openpyxl>=3.1.0"]
+ina = ["inaSpeechSegmenter>=0.7.0"]
+
+[dependency-groups]
+dev = ["pytest>=8.0.0"]
 eval = ["jiwer>=3.0.0", "openpyxl>=3.1.0"]
 ina = ["inaSpeechSegmenter>=0.7.0"]
 
@@ -34,6 +41,4 @@ packages = ["audio_asr_pipeline"]
 override-dependencies = [
     "tensorflow==2.21.0; sys_platform == 'win32'",
 ]
-dev-dependencies = [
-    "pytest>=8.0.0",
-]
+default-groups = ["dev", "eval", "ina"]

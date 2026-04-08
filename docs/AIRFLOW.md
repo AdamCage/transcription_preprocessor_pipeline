@@ -46,7 +46,12 @@ def transcribe_batch(**context):
 
     cfg = PipelineConfig(
         coarse_segmenter_backend="whole_file",
-        vllm=VLLMTranscribeConfig(base_url=base_url, model="whisper-1"),
+        vllm=VLLMTranscribeConfig(
+            base_url=base_url,
+            model="whisper-1",
+            stt_backend="openai",  # or "httpx" for raw multipart POST
+            api_key=None,  # set if vLLM requires --api-key
+        ),
         max_concurrent_files=2,
         fail_fast=False,
     )
@@ -89,7 +94,10 @@ def asr_taskflow_example():
         base_url = Variable.get("stt_base_url", default_var="http://127.0.0.1:8000")
         cfg = PipelineConfig(
             coarse_segmenter_backend="whole_file",
-            vllm=VLLMTranscribeConfig(base_url=base_url),
+            vllm=VLLMTranscribeConfig(
+                base_url=base_url,
+                stt_backend="openai",
+            ),
             fail_fast=False,
         )
         r = process_file_sync(path_str, cfg)

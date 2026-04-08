@@ -59,7 +59,7 @@ Container_Ext(stt, "STT сервис", "HTTP", "Whisper / совместимый
 Rel(user, eval, "uv run python …")
 Rel(user, lib, "import / process_file")
 Rel(eval, lib, "AudioTranscriptionPipeline")
-Rel(lib, stt, "httpx AsyncClient, WAV bytes")
+Rel(lib, stt, "openai AsyncClient / httpx, WAV bytes")
 ```
 
 Упрощённая блок-схема зависимостей:
@@ -104,7 +104,7 @@ Container_Boundary(api, "audio_asr_pipeline") {
     Component(seg, "segmenters", "Python", "inaSpeechSegmenter | whole_file")
     Component(vad, "vad", "Python", "Silero ONNX refine spans")
     Component(ch, "chunking", "Python", "spans → AudioChunk + WAV bytes")
-    Component(tr, "VLLMTranscriptionClient", "Python", "multipart POST")
+    Component(tr, "STT clients", "Python", "OpenAITranscriptionClient / VLLMTranscriptionClient")
     Component(mg, "merge", "Python", "verbose_json, текст")
 
     Rel(pipeline, pre, "вызывает")
@@ -130,7 +130,7 @@ sequenceDiagram
     participant Seg as segmenter (ina | whole_file)
     participant VAD as Silero VAD
     participant Chunk as chunking + io
-    participant HTTP as httpx → STT
+    participant HTTP as openai/httpx → STT
     participant Merge as merge_transcriptions
 
     Caller->>Pipe: process_file(path)
@@ -145,7 +145,7 @@ sequenceDiagram
     Pre-->>Exec: loaded + spans + labeled
     Exec->>Chunk: build_chunks, extract_span_to_wav_bytes
     Chunk-->>Pipe: chunks[].audio_bytes
-    loop По чанкам (семафор чанков)
+    loop По чанкам (глобальный семафор _global_stt_sem)
         Pipe->>HTTP: transcribe_chunk WAV
         HTTP-->>Pipe: JSON сегментов / text
     end
@@ -185,7 +185,7 @@ sequenceDiagram
 | Объект | Файл | Роль |
 |--------|------|------|
 | `PipelineConfig` | `config.py` | sample_rate, coarse backend, VAD, chunk limits, drop_music/noise/silence, concurrency caps |
-| `VLLMTranscribeConfig` | `config.py` | base_url, model, timeouts, trust_env |
+| `VLLMTranscribeConfig` | `config.py` | stt_backend, base_url, api_key, model, timeouts, trust_env |
 | `DEFAULT_COARSE_SEGMENTER_BACKEND` | `config.py` | согласован с дефолтом eval (`ina`) |
 
 Важно: **`max_concurrent_files`** задаёт размер **общего** `asyncio.Semaphore` на экземпляр `AudioTranscriptionPipeline`, поэтому параллельно полностью обрабатывается не больше этого числа файлов (стерео занимает два слота, если каналы гоняются параллельно).
@@ -201,14 +201,18 @@ sequenceDiagram
 
 При **`fail_fast=False`** типичные сбои загрузки/сегментации/STT для одного пути не пробрасываются наружу из батча: вместо этого для этого файла возвращается **`PipelineResult`** с заполненным полем **`error`** (успех: `error is None`). Подробнее про оркестрацию из Airflow, XCom и синхронные обёртки: **[AIRFLOW.md](AIRFLOW.md)**.
 
-Экземпляр **`AudioTranscriptionPipeline`** рекомендуется закрывать через **`async with`** или **`await aclose()`**: общий **`httpx.AsyncClient`** и (если не передан внешний) внутренний **`ThreadPoolExecutor`** освобождаются при выходе.
+Экземпляр **`AudioTranscriptionPipeline`** рекомендуется закрывать через **`async with`** или **`await aclose()`**: общий **`httpx.AsyncClient`** (или `AsyncOpenAI`) и (если не передан внешний) внутренний **`ThreadPoolExecutor`** освобождаются при выходе.
 
 ## 9. Зависимости (логически)
 
 - **Звук:** librosa, soundfile, numpy  
 - **VAD:** torch + Silero через **ONNX** (`onnxruntime`), см. `vad.py`  
-- **Coarse ina:** optional extra `ina`, TensorFlow; на Windows в `pyproject` override для plain `tensorflow`  
-- **STT:** httpx async, multipart WAV  
+- **Coarse ina:** dependency-group `ina` (inaSpeechSegmenter + TensorFlow); на Windows в `pyproject` override для plain `tensorflow`  
+- **STT (openai, рекомендуемый):** `openai` — `AsyncOpenAI`, нативные ретраи, авторизация, connection pool  
+- **STT (httpx, fallback):** httpx async, raw multipart WAV POST  
+- **Eval:** dependency-group `eval` (jiwer, openpyxl); `tqdm` (в core deps)  
+
+Установка: **`uv sync`** ставит все dependency-groups по умолчанию (dev, eval, ina). Для pip: `pip install .[eval,ina]`.
 
 ## 10. Где читать код
 
@@ -219,7 +223,7 @@ sequenceDiagram
 | `segmenters.py` | ina (в т.ч. female/male → speech), whole_file |
 | `vad.py` | Silero ONNX, паддинг/мердж промежутков |
 | `chunking.py` | Ограничение длины чанка, `AudioChunk` |
-| `transcribe.py` | OpenAI-form POST |
+| `transcribe.py` | STT clients: `OpenAITranscriptionClient` (openai lib) / `VLLMTranscriptionClient` (httpx) |
 | `merge.py` | Таймкоды, итоговый текст |
 | `io.py` | load, WAV bytes, `split_stereo_channels`, `write_mono_wav` |
 

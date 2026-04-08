@@ -1,19 +1,32 @@
-"""OpenAI-compatible async STT client."""
+"""OpenAI-compatible async STT clients (httpx raw and openai library)."""
 
 from __future__ import annotations
 
 import asyncio
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 import httpx
+from openai import AsyncOpenAI
 
 from audio_asr_pipeline.config import VLLMTranscribeConfig
 from audio_asr_pipeline.errors import TranscriptionRequestError
 from audio_asr_pipeline.models import AudioChunk
 
 logger = logging.getLogger(__name__)
+
+
+class STTClient(Protocol):
+    """Common interface for STT backends."""
+
+    async def transcribe_chunk(
+        self,
+        chunk: AudioChunk,
+        **kwargs: Any,
+    ) -> dict[str, Any]: ...
+
+    async def aclose(self) -> None: ...
 
 
 def _retry_after_seconds(response: httpx.Response, cap: float) -> float:
@@ -129,6 +142,90 @@ class VLLMTranscriptionClient:
         finally:
             if own_client:
                 await client.aclose()
+
+
+    async def aclose(self) -> None:
+        pass
+
+
+class OpenAITranscriptionClient:
+    """STT client using the ``openai`` library's ``AsyncOpenAI`` with native
+    retry, connection-pool, and auth-header handling."""
+
+    def __init__(self, config: VLLMTranscribeConfig) -> None:
+        self._cfg = config
+        self._client: AsyncOpenAI | None = None
+
+    def _ensure_client(self) -> AsyncOpenAI:
+        if self._client is None:
+            base = self._cfg.base_url.rstrip("/")
+            if not base.endswith("/v1"):
+                base = base + "/v1"
+            self._client = AsyncOpenAI(
+                api_key=self._cfg.api_key or "EMPTY",
+                base_url=base,
+                timeout=self._cfg.request_timeout_sec,
+                max_retries=self._cfg.max_retries,
+            )
+        return self._client
+
+    async def transcribe_chunk(
+        self,
+        chunk: AudioChunk,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        if not chunk.audio_bytes:
+            raise TranscriptionRequestError(f"Chunk {chunk.chunk_id} has no audio_bytes")
+        client = self._ensure_client()
+        cfg = self._cfg
+        logger.debug(
+            "STT openai POST chunk=%s bytes=%d model=%s",
+            chunk.chunk_id,
+            len(chunk.audio_bytes),
+            cfg.model,
+        )
+        granularities: list[str] = ["segment"]
+        if cfg.include_word_timestamps:
+            granularities.append("word")
+
+        extra_body: dict[str, Any] = {}
+        if cfg.prompt:
+            extra_body["prompt"] = cfg.prompt
+
+        try:
+            kwargs_create: dict[str, Any] = {
+                "model": cfg.model,
+                "file": (f"{chunk.chunk_id}.wav", chunk.audio_bytes, "audio/wav"),
+                "response_format": "verbose_json",
+                "timestamp_granularities": granularities,
+            }
+            if cfg.language:
+                kwargs_create["language"] = cfg.language
+            if cfg.temperature is not None:
+                kwargs_create["temperature"] = cfg.temperature
+            if extra_body:
+                kwargs_create["extra_body"] = extra_body
+            resp = await client.audio.transcriptions.create(**kwargs_create)
+        except Exception as exc:
+            raise TranscriptionRequestError(
+                f"STT openai failed for {chunk.chunk_id}: {exc}"
+            ) from exc
+
+        if hasattr(resp, "model_dump"):
+            return resp.model_dump()
+        return dict(resp)  # type: ignore[arg-type]
+
+    async def aclose(self) -> None:
+        if self._client is not None:
+            await self._client.close()
+            self._client = None
+
+
+def create_stt_client(config: VLLMTranscribeConfig) -> VLLMTranscriptionClient | OpenAITranscriptionClient:
+    """Factory: choose STT client based on ``config.stt_backend``."""
+    if config.stt_backend == "openai":
+        return OpenAITranscriptionClient(config)
+    return VLLMTranscriptionClient(config)
 
 
 def write_chunk_to_temp(chunk: AudioChunk, directory: Path) -> Path:
