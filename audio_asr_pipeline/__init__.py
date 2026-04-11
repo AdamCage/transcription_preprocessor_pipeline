@@ -1,6 +1,11 @@
 """Audio preprocessing and OpenAI-compatible chunked STT pipeline."""
 
-from audio_asr_pipeline.config import PipelineConfig, STTBackendName, VLLMTranscribeConfig
+from audio_asr_pipeline.config import (
+    GemmaApiStyle,
+    PipelineConfig,
+    STTBackendName,
+    VLLMTranscribeConfig,
+)
 from audio_asr_pipeline.errors import (
     AudioAsrPipelineError,
     AudioLoadError,
@@ -31,6 +36,7 @@ from audio_asr_pipeline.preprocess import preprocess_audio
 
 __all__ = [
     "AudioAsrPipelineError",
+    "GemmaApiStyle",
     "AudioChunk",
     "AudioFileTask",
     "AudioLoadError",

@@ -104,30 +104,38 @@ def preprocess_audio(
     if not speech_spans:
         raise SegmentationError(f"No speech spans after coarse segmentation: {path}")
 
-    if config.vad_backend != "silero":
+    if config.vad_backend == "none":
+        timings["vad_sec"] = 0.0
+        refined = speech_spans
+        log.info(
+            "preprocess | file_id=%s | stage=vad_skipped | spans=%d",
+            fid,
+            len(refined),
+        )
+    elif config.vad_backend == "silero":
+        t1 = time.perf_counter()
+        refined = refine_speech_spans_with_silero(
+            np.asarray(loaded.samples, dtype=np.float32),
+            loaded.sample_rate,
+            speech_spans,
+            threshold=config.vad_threshold,
+            min_speech_duration_ms=config.min_speech_duration_ms,
+            min_silence_duration_ms=config.min_silence_duration_ms,
+            speech_pad_ms=config.speech_pad_ms,
+            merge_gap_seconds=config.merge_gap_seconds,
+        )
+        timings["vad_sec"] = time.perf_counter() - t1
+        pre_kept = sum(s.end - s.start for s in refined)
+        log.info(
+            "preprocess | file_id=%s | stage=vad_done | refined_spans=%d | "
+            "kept_speech_sec_pre_filter=%.3f | wall_sec=%.3f",
+            fid,
+            len(refined),
+            pre_kept,
+            timings["vad_sec"],
+        )
+    else:
         raise SegmentationError(f"Unknown vad_backend: {config.vad_backend}")
-
-    t1 = time.perf_counter()
-    refined = refine_speech_spans_with_silero(
-        np.asarray(loaded.samples, dtype=np.float32),
-        loaded.sample_rate,
-        speech_spans,
-        threshold=config.vad_threshold,
-        min_speech_duration_ms=config.min_speech_duration_ms,
-        min_silence_duration_ms=config.min_silence_duration_ms,
-        speech_pad_ms=config.speech_pad_ms,
-        merge_gap_seconds=config.merge_gap_seconds,
-    )
-    timings["vad_sec"] = time.perf_counter() - t1
-    pre_kept = sum(s.end - s.start for s in refined)
-    log.info(
-        "preprocess | file_id=%s | stage=vad_done | refined_spans=%d | "
-        "kept_speech_sec_pre_filter=%.3f | wall_sec=%.3f",
-        fid,
-        len(refined),
-        pre_kept,
-        timings["vad_sec"],
-    )
 
     refined = _filter_short_spans(refined, config.min_segment_duration_sec)
     post_kept = sum(s.end - s.start for s in refined)

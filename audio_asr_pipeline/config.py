@@ -8,8 +8,9 @@ from typing import Literal, Self
 from pydantic import BaseModel, Field, model_validator
 
 CoarseBackendName = Literal["whole_file", "ina"]
-VADBackendName = Literal["silero"]
-STTBackendName = Literal["httpx", "openai"]
+VADBackendName = Literal["silero", "none"]
+STTBackendName = Literal["httpx", "openai", "gemma"]
+GemmaApiStyle = Literal["ollama_native", "openai_chat"]
 
 # Shared default so eval and PipelineConfig stay aligned
 DEFAULT_COARSE_SEGMENTER_BACKEND: CoarseBackendName = "ina"
@@ -31,6 +32,12 @@ class VLLMTranscribeConfig(BaseModel):
     retry_after_cap_sec: float = 60.0  # max sleep for Retry-After on 429/503
     # httpx defaults trust_env=True: HTTP(S)_PROXY can steal localhost traffic
     trust_env: bool = False
+
+    # --- Gemma chat-based ASR (stt_backend="gemma") ---
+    gemma_api_style: GemmaApiStyle = "ollama_native"
+    gemma_asr_prompt: str | None = None
+    gemma_max_tokens: int = 512
+    gemma_thinking: bool = False
 
     @model_validator(mode="after")
     def _validate_vllm(self) -> Self:

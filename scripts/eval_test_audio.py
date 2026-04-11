@@ -113,7 +113,8 @@ def _log_eval_banner(out_root: Path) -> None:
 
 def _normalize_for_metrics(text: str) -> str:
     t = text.strip().lower()
-    t = re.sub(r"\s+", " ", t)
+    t = re.sub(r"[^\w\s]", "", t, flags=re.UNICODE)
+    t = re.sub(r"\s+", " ", t).strip()
     return t
 
 
@@ -852,25 +853,37 @@ async def _run(args: argparse.Namespace, out_root: Path) -> int:
         log.error("No .wav files in %s", audio_dir)
         return 1
 
+    vllm_kwargs: dict = {
+        "stt_backend": args.stt_backend,
+        "base_url": args.base_url.rstrip("/"),
+        "api_key": args.api_key,
+        "model": args.model,
+        "language": args.language,
+        "trust_env": args.trust_env,
+    }
+    if args.stt_backend == "gemma":
+        vllm_kwargs["gemma_api_style"] = args.gemma_api_style
+
     cfg = PipelineConfig(
         max_concurrent_files=args.concurrency,
         max_concurrent_chunks=args.concurrency,
         max_in_flight_requests=max(8, args.concurrency * 2),
         coarse_segmenter_backend=args.coarse_backend,  # type: ignore[arg-type]
         ina_force_cpu=not args.ina_allow_gpu,
-        vllm=VLLMTranscribeConfig(
-            stt_backend=args.stt_backend,
-            base_url=args.base_url.rstrip("/"),
-            api_key=args.api_key,
-            model=args.model,
-            language=args.language,
-            trust_env=args.trust_env,
-        ),
+        vad_backend="none" if args.no_vad else "silero",
+        vllm=VLLMTranscribeConfig(**vllm_kwargs),
     )
     log.info("pipeline_config | %s", cfg.model_dump(mode="json"))
+
+    if args.stt_backend == "gemma":
+        endpoint_label = f"{args.base_url.rstrip('/')}/api/chat"
+        if args.gemma_api_style == "openai_chat":
+            endpoint_label = f"{args.base_url.rstrip('/')}/v1/chat/completions"
+    else:
+        endpoint_label = f"{args.base_url.rstrip('/')}/v1/audio/transcriptions"
     log.info(
         "STT %s | model=%s | stt_backend=%s | file_concurrency=%d | trust_env=%s",
-        f"{args.base_url.rstrip('/')}/v1/audio/transcriptions",
+        endpoint_label,
         args.model,
         args.stt_backend,
         args.concurrency,
@@ -1173,11 +1186,12 @@ def main() -> None:
     )
     p.add_argument(
         "--stt-backend",
-        choices=("httpx", "openai"),
+        choices=("httpx", "openai", "gemma"),
         default="openai",
         help=(
-            "STT client backend: openai (recommended for vLLM, handles auth and retries natively) "
-            "or httpx (raw multipart POST). Default: openai."
+            "STT client backend: openai (recommended for vLLM Whisper, handles auth and retries natively), "
+            "httpx (raw multipart POST), or gemma (Gemma-4 chat-based ASR via Ollama/vLLM). "
+            "Default: openai."
         ),
     )
     p.add_argument(
@@ -1185,7 +1199,29 @@ def main() -> None:
         default=None,
         help="API key for STT server (sent as Authorization: Bearer). Required by some vLLM deployments.",
     )
+    p.add_argument(
+        "--no-vad",
+        action="store_true",
+        help="Skip VAD (Silero); coarse spans are chunked by duration only.",
+    )
+    p.add_argument(
+        "--gemma-api-style",
+        choices=("ollama_native", "openai_chat"),
+        default="ollama_native",
+        help=(
+            "API style for --stt-backend gemma: ollama_native (Ollama /api/chat, current) "
+            "or openai_chat (/v1/chat/completions, for vLLM). Default: ollama_native."
+        ),
+    )
     args = p.parse_args()
+
+    if args.stt_backend == "gemma":
+        if args.base_url == "http://127.0.0.1:8000":
+            args.base_url = "http://localhost:11434"
+        if args.model == "large-v3-turbo":
+            args.model = "gemma4:e4b"
+        if args.language is None:
+            args.language = "ru"
     out_root = _resolve_out_root(args)
     out_root.mkdir(parents=True, exist_ok=True)
     if not args.no_log_file and args.log_file is None:

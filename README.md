@@ -1,6 +1,6 @@
 # Audio ASR pipeline
 
-Библиотека **`audio_asr_pipeline`**: грубая сегментация речи/музыки/шума, VAD (Silero через ONNX), нарезка чанков, вызов **OpenAI-совместимого** STT (`/v1/audio/transcriptions`), склейка текста и **`verbose_json`**.
+Библиотека **`audio_asr_pipeline`**: грубая сегментация речи/музыки/шума, VAD (Silero через ONNX), нарезка чанков, вызов STT (Whisper через OpenAI-совместимый `/v1/audio/transcriptions` **или** Gemma-4 через chat API), склейка текста и **`verbose_json`**.
 
 Подробная архитектура (C4, последовательности, ошибки, лимиты): [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
@@ -10,7 +10,7 @@
 2. **Coarse** (`ina` или `whole_file`) → интервалы с метками.
 3. **VAD** уточняет границы речи; фильтрация музыки/шума/тишины по конфигу.
 4. **Chunking** — WAV-байты на чанк для HTTP.
-5. **Transcribe** — вызов STT через `openai` `AsyncOpenAI` (по умолчанию) или `httpx` (fallback); лимит `max_in_flight_requests`.
+5. **Transcribe** — вызов STT через один из трёх бэкендов (см. ниже); лимит `max_in_flight_requests`.
 6. **Merge** — итоговый текст и `verbose_json`.
 
 Упрощённая схема модулей (см. также Mermaid в [ARCHITECTURE.md](docs/ARCHITECTURE.md)):
@@ -57,7 +57,7 @@ flowchart TB
 | `segmenters.py` | `ina` / `whole_file` |
 | `vad.py` | Silero ONNX |
 | `chunking.py` | ограничения длины чанка |
-| `transcribe.py` | STT: `OpenAITranscriptionClient` (openai lib) / `VLLMTranscriptionClient` (httpx); ретраи / 429 |
+| `transcribe.py` | STT: `OpenAITranscriptionClient` (openai lib) / `VLLMTranscriptionClient` (httpx) / `GemmaTranscriptionClient` (chat API); ретраи / 429 |
 | `merge.py` | склейка ответов |
 | `config.py` | `PipelineConfig`, `VLLMTranscribeConfig` |
 
@@ -142,7 +142,7 @@ uv run python scripts/eval_test_audio.py \
 | `--audio-dir` | `test_audio` | Путь к директории с `.wav`-файлами (и `.txt`-эталонами рядом с ними). |
 | `--base-url` | `http://127.0.0.1:8000` | URL STT-сервера (OpenAI-совместимый endpoint). Для vLLM: адрес, на котором запущен `vllm serve`. |
 | `--api-key` | нет | API-ключ для авторизации на STT-сервере (отправляется как `Authorization: Bearer <key>`). Обязателен, если vLLM запущен с `--api-key`. |
-| `--stt-backend` | `openai` | Бэкенд HTTP-клиента: `openai` (библиотека `openai`, рекомендуется для vLLM — нативные ретраи, авторизация, connection pool) или `httpx` (raw multipart POST). |
+| `--stt-backend` | `openai` | Бэкенд HTTP-клиента: `openai` (библиотека `openai`, рекомендуется для Whisper на vLLM), `httpx` (raw multipart POST) или `gemma` (chat-based ASR через Gemma-4, см. раздел ниже). |
 | `--model` | `large-v3-turbo` | Название модели Whisper на сервере. Передаётся в поле `model` запроса. |
 | `--language` | нет (авто) | Код языка ISO 639-1 (`ru`, `en`, `de` и т.д.). Если не задан, модель определяет язык автоматически. |
 | `--concurrency` | `3` | Максимум файлов, обрабатываемых параллельно (препроцессинг + STT). В стерео-режиме один WAV занимает два слота (по каналу). Рекомендуется ставить кратно числу GPU-воркеров на STT-сервере. |
@@ -181,6 +181,140 @@ eval_results/
 Паттерны интеграции (async `await pipeline.process_file` vs **`process_file_sync`** в синхронных тасках, вложенный event loop, XCom, **`expand` по списку путей**): [docs/AIRFLOW.md](docs/AIRFLOW.md).
 
 Рекомендация: **`audio_asr_pipeline` ставить в образ/venv воркера** (`pip install .` / wheel), а не копировать исходники в DAG. Пример двух DAG (стерео call-center + моно) и тонкий слой **`plugins/asr_helpers`**: [airflow_scaffold/README.md](airflow_scaffold/README.md).
+
+## Gemma-4 ASR (chat-based STT)
+
+Бэкенд `gemma` позволяет использовать мультимодальную модель **Gemma-4** (`gemma-4-E4B-it` и др.) для распознавания речи через chat completions API. Gemma принимает аудио в base64, возвращает plain-text транскрипцию, а пайплайн автоматически формирует синтетический `verbose_json` с таймингами на уровне чанков.
+
+### Поддерживаемые серверы
+
+| Сервер | API style | Как передаётся аудио | Endpoint |
+|--------|-----------|----------------------|----------|
+| **Ollama** | `ollama_native` (по умолчанию) | base64 WAV в поле `images` | `POST /api/chat` |
+| **vLLM** / OpenAI-совместимый | `openai_chat` | `input_audio` content block | `POST /v1/chat/completions` |
+
+### Подготовка (Ollama)
+
+```bash
+# Установить Ollama: https://ollama.com/download
+# Скачать модель (≈3 GB для E4B):
+ollama pull gemma4:e4b
+
+# Проверить, что модель доступна:
+ollama list | findstr gemma
+```
+
+Ollama по умолчанию слушает на `http://localhost:11434`.
+
+### Запуск: моно-файлы (простейший случай)
+
+Минимальная команда — транскрипция всех WAV из директории без coarse-сегментации и без VAD:
+
+```bash
+uv run python scripts/eval_test_audio.py \
+  --stt-backend gemma \
+  --audio-dir ./test_audio_mad \
+  --coarse-backend whole_file \
+  --no-vad \
+  -v
+```
+
+При `--stt-backend gemma` скрипт автоматически выставляет значения по умолчанию:
+- `--base-url` → `http://localhost:11434`
+- `--model` → `gemma4:e4b`
+- `--language` → `ru`
+
+Любое из этих значений можно переопределить явно.
+
+### Запуск: моно-файлы с coarse + VAD
+
+```bash
+uv run python scripts/eval_test_audio.py \
+  --stt-backend gemma \
+  --audio-dir ./test_audio_mad \
+  --coarse-backend ina \
+  -v
+```
+
+Здесь `ina` выполняет грубую сегментацию (речь / музыка / шум / тишина), затем Silero VAD уточняет границы речевых участков. Транскрибируются только речевые чанки.
+
+### Запуск: стерео call-center
+
+```bash
+uv run python scripts/eval_test_audio.py \
+  --stt-backend gemma \
+  --stereo-call \
+  --audio-dir ./test_audio_cc2 \
+  --coarse-backend ina \
+  --concurrency 2 \
+  -v
+```
+
+Стерео WAV разделяется на два моно-канала (`call_from` / `call_to`), каждый проходит полный пайплайн независимо.
+
+### Запуск: OpenAI-совместимый сервер (vLLM)
+
+Если Gemma развёрнута на vLLM или другом сервере с OpenAI-совместимым chat API:
+
+```bash
+uv run python scripts/eval_test_audio.py \
+  --stt-backend gemma \
+  --gemma-api-style openai_chat \
+  --base-url http://127.0.0.1:8000 \
+  --model gemma-4-E4B-it \
+  --audio-dir ./test_audio_mad \
+  --coarse-backend whole_file \
+  --no-vad \
+  -v
+```
+
+### Полная справка по флагам Gemma
+
+| Флаг | Значение по умолчанию | Описание |
+|------|----------------------|----------|
+| `--stt-backend gemma` | — | Включает Gemma chat-based ASR вместо Whisper. |
+| `--gemma-api-style` | `ollama_native` | Стиль API: `ollama_native` (Ollama `/api/chat`) или `openai_chat` (vLLM `/v1/chat/completions`). |
+| `--base-url` | `http://localhost:11434` (для gemma) | URL сервера. Для Ollama — `http://localhost:11434`, для vLLM — адрес сервера. |
+| `--model` | `gemma4:e4b` (для gemma) | Название модели на сервере. Для Ollama: `gemma4:e4b`; для vLLM: как указано при `vllm serve`. |
+| `--language` | `ru` (для gemma) | Код языка ISO 639-1. Встраивается в ASR-промпт для Gemma. |
+| `--no-vad` | выкл | Пропустить Silero VAD — coarse-спаны напрямую идут в chunking. Полезно для отладки. |
+| `--coarse-backend` | `ina` | `whole_file` — всё аудио считается речью; `ina` — отделяет речь от музыки/шума. |
+| `--concurrency` | `3` | Параллельность обработки файлов. Для Ollama на одной GPU рекомендуется `1`–`2`. |
+| `--api-key` | нет | API-ключ (если сервер требует авторизацию). |
+| `-v` | выкл | DEBUG-логирование: видно каждый запрос к Gemma, промпт, ретраи. |
+
+### Ограничения Gemma ASR
+
+- **Лимит длины аудио**: Gemma поддерживает до ~30 секунд аудио на вход. Пайплайн нарезает чанки по 28 с (`max_chunk_duration_sec`), что укладывается в лимит.
+- **Нет word-level timestamps**: Gemma возвращает plain text. `verbose_json` формируется синтетически — один сегмент на чанк с chunk-level таймингами (start/end).
+- **Ollama 500**: Ollama иногда возвращает `500 Internal Server Error` на тяжёлых запросах ([ollama#15333](https://github.com/ollama/ollama/issues/15333)). Клиент автоматически ретраит с экспоненциальным бэкоффом.
+- **Скорость**: На CPU Ollama обработка значительно медленнее, чем Whisper. Рекомендуется GPU.
+
+### Пример полного конфига (программный вызов)
+
+```python
+from audio_asr_pipeline import PipelineConfig, AudioTranscriptionPipeline
+
+config = PipelineConfig(
+    coarse_segmenter_backend="ina",
+    vad_backend="silero",          # или "none" для отключения VAD
+    vllm={
+        "stt_backend": "gemma",
+        "base_url": "http://localhost:11434",
+        "model": "gemma4:e4b",
+        "language": "ru",
+        "gemma_api_style": "ollama_native",  # или "openai_chat" для vLLM
+        "gemma_max_tokens": 512,
+        "request_timeout_sec": 120.0,
+        "max_retries": 3,
+    },
+)
+
+pipeline = AudioTranscriptionPipeline(config)
+result = await pipeline.process_file("recording.wav")
+print(result.text)
+print(result.verbose_json)
+```
 
 ## Прочее
 
