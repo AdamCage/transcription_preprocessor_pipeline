@@ -90,6 +90,19 @@ class TestSileroVADGPU:
         model, _ = vad._model_pool.get()
         model.reset_states.assert_called()
 
+    def test_parallel_spans(self, sample_wav_bytes, fake_silero_model):
+        """With executor_workers > 1, multiple spans are processed in parallel."""
+        vad = SileroVADGPU(device="cpu", executor_workers=2)
+        vad.load()
+        spans = [
+            TimeSpanIn(start=0.0, end=0.3),
+            TimeSpanIn(start=0.3, end=0.6),
+            TimeSpanIn(start=0.6, end=1.0),
+        ]
+        result = vad.refine(sample_wav_bytes, spans)
+        assert len(result) >= 1
+        assert vad._model_pool.qsize() == 2
+
     def test_shutdown(self, fake_silero_model):
         vad = SileroVADGPU(device="cpu", executor_workers=1)
         vad.load()

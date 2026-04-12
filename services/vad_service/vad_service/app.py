@@ -5,20 +5,22 @@ from __future__ import annotations
 import asyncio
 import io
 import json
-import logging
 import time
+import uuid
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
 import numpy as np
 import soundfile as sf
+import structlog
 import torch
-from fastapi import FastAPI, Form, HTTPException, UploadFile
-from fastapi.responses import Response
+from fastapi import FastAPI, Form, HTTPException, Request, Response, UploadFile
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 
 from vad_service.config import ServiceConfig, get_config
 from vad_service.inference import SileroVADGPU
+from vad_service.logging_config import configure_logging
 from vad_service.metrics import (
     GPU_MEM_BYTES,
     REQUEST_COUNT,
@@ -33,7 +35,7 @@ from vad_service.models import (
     TimeSpanIn,
 )
 
-log = logging.getLogger(__name__)
+log = structlog.stdlib.get_logger(__name__)
 
 _AUDIO_CONTENT_TYPES = frozenset(
     {
@@ -48,8 +50,23 @@ _AUDIO_CONTENT_TYPES = frozenset(
 )
 
 
+class _RequestIDMiddleware(BaseHTTPMiddleware):
+    """Propagate or generate X-Request-ID and bind to structlog context."""
+
+    async def dispatch(
+        self, request: Request, call_next: RequestResponseEndpoint
+    ) -> Response:
+        request_id = request.headers.get("x-request-id") or uuid.uuid4().hex
+        structlog.contextvars.clear_contextvars()
+        structlog.contextvars.bind_contextvars(request_id=request_id)
+        response = await call_next(request)
+        response.headers["x-request-id"] = request_id
+        return response
+
+
 def _build_app(config: ServiceConfig | None = None) -> FastAPI:
     config = config or get_config()
+    configure_logging(config.log_level, config.log_dir)
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
@@ -61,21 +78,21 @@ def _build_app(config: ServiceConfig | None = None) -> FastAPI:
         vad.load()
 
         # Warm-up: force JIT compilation and CUDA context init
-        _warmup_t0 = time.perf_counter()
+        warmup_t0 = time.perf_counter()
         dummy = np.zeros(16000, dtype=np.float32)
         buf = io.BytesIO()
         sf.write(buf, dummy, 16000, format="WAV")
         vad.refine(buf.getvalue(), [TimeSpanIn(start=0.0, end=1.0)])
-        log.info("Warm-up complete in %.2fs", time.perf_counter() - _warmup_t0)
+        log.info("Warm-up complete", warmup_sec=round(time.perf_counter() - warmup_t0, 2))
 
         _app.state.vad = vad
         _app.state.sem = asyncio.Semaphore(config.max_concurrency)
         _app.state.config = config
         log.info(
-            "VAD service ready | device=%s | workers=%d | max_concurrency=%d",
-            vad.device,
-            config.executor_workers,
-            config.max_concurrency,
+            "VAD service ready",
+            device=vad.device,
+            workers=config.executor_workers,
+            max_concurrency=config.max_concurrency,
         )
         yield
 
@@ -92,6 +109,7 @@ def _build_app(config: ServiceConfig | None = None) -> FastAPI:
         version="0.1.0",
         lifespan=lifespan,
     )
+    app.add_middleware(_RequestIDMiddleware)
 
     @app.post("/refine", response_model=RefineResponse)
     async def refine_spans(audio: UploadFile, request: str = Form(...)) -> RefineResponse:
@@ -139,6 +157,12 @@ def _build_app(config: ServiceConfig | None = None) -> FastAPI:
             return RefineResponse(spans=[])
 
         SPANS_IN.inc(len(req.spans))
+        log.info(
+            "Refine request received",
+            audio_bytes=len(raw),
+            spans_in=len(req.spans),
+            threshold=req.threshold,
+        )
 
         sem: asyncio.Semaphore = app.state.sem
         try:
@@ -159,7 +183,8 @@ def _build_app(config: ServiceConfig | None = None) -> FastAPI:
         except asyncio.TimeoutError:
             status_label = "timeout"
             log.error(
-                "VAD inference timed out after %.0fs", config.inference_timeout_sec,
+                "VAD inference timed out",
+                timeout_sec=config.inference_timeout_sec,
             )
             raise HTTPException(
                 status_code=504,
@@ -178,6 +203,13 @@ def _build_app(config: ServiceConfig | None = None) -> FastAPI:
             REQUEST_LATENCY.observe(time.perf_counter() - t0)
 
         SPANS_OUT.inc(len(refined))
+        latency = time.perf_counter() - t0
+        log.info(
+            "Refine request complete",
+            spans_out=len(refined),
+            latency_sec=round(latency, 3),
+            status=status_label,
+        )
         return RefineResponse(spans=refined)
 
     @app.get("/health", response_model=HealthResponse)

@@ -14,6 +14,7 @@ class ServiceConfig(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 8002
     log_level: str = "info"
+    log_dir: str = "logs"
     model_path: str = ""
     max_audio_size_mb: float = 200.0
     inference_timeout_sec: float = 120.0
