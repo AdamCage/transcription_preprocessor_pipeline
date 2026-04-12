@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections import Counter
 from concurrent.futures import Executor, ThreadPoolExecutor
 from pathlib import Path
 from types import TracebackType
@@ -15,17 +16,24 @@ import numpy as np
 
 from audio_asr_pipeline.chunking import build_chunks_from_spans, spans_to_audio_chunks
 from audio_asr_pipeline.config import PipelineConfig
-from audio_asr_pipeline.errors import MergeError, TranscriptionRequestError
-from audio_asr_pipeline.io import extract_span_to_wav_bytes
+from audio_asr_pipeline.errors import MergeError, SegmentationError, TranscriptionRequestError
+from audio_asr_pipeline.io import extract_span_to_wav_bytes, load_normalized_audio
 from audio_asr_pipeline.merge import build_verbose_json_skeleton, merge_transcriptions
 from audio_asr_pipeline.models import (
     AudioChunk,
     AudioFileTask,
     LabeledSegment,
+    LoadedAudio,
     PipelineResult,
+    TimeSpan,
     TranscribedChunk,
 )
 from audio_asr_pipeline.preprocess import preprocess_audio
+from audio_asr_pipeline.remote_clients import (
+    RemoteSegmentationClient,
+    RemoteVADClient,
+    _samples_to_wav_bytes,
+)
 from audio_asr_pipeline.transcribe import (
     OpenAITranscriptionClient,
     VLLMTranscriptionClient,
@@ -103,6 +111,10 @@ class AudioTranscriptionPipeline:
         self.config = config
         self._client = create_stt_client(config.vllm)
         self._use_httpx_backend = config.vllm.stt_backend == "httpx"
+        self._use_remote_preprocess = (
+            config.coarse_segmenter_backend == "remote"
+            or config.vad_backend == "remote"
+        )
         self._file_sem = asyncio.Semaphore(config.max_concurrent_files)
         self._global_stt_sem = asyncio.Semaphore(config.max_in_flight_requests)
         if executor is None:
@@ -115,10 +127,28 @@ class AudioTranscriptionPipeline:
             self._owns_executor = False
         self._http_client: httpx.AsyncClient | None = None
         self._http_lock = asyncio.Lock()
+
+        self._remote_seg: RemoteSegmentationClient | None = None
+        self._remote_vad: RemoteVADClient | None = None
+        if config.coarse_segmenter_backend == "remote":
+            self._remote_seg = RemoteSegmentationClient(
+                config.segmentation_service_url,
+                request_timeout_sec=config.remote_request_timeout_sec,
+                connect_timeout_sec=config.remote_connect_timeout_sec,
+            )
+        if config.vad_backend == "remote":
+            self._remote_vad = RemoteVADClient(
+                config.vad_service_url,
+                request_timeout_sec=config.remote_request_timeout_sec,
+                connect_timeout_sec=config.remote_connect_timeout_sec,
+            )
+
         log.info(
-            "pipeline init | stt_backend=%s | max_concurrent_files=%d | "
-            "max_concurrent_chunks=%d | max_in_flight_requests=%d",
+            "pipeline init | stt_backend=%s | coarse=%s | vad=%s | "
+            "max_concurrent_files=%d | max_concurrent_chunks=%d | max_in_flight_requests=%d",
             config.vllm.stt_backend,
+            config.coarse_segmenter_backend,
+            config.vad_backend,
             config.max_concurrent_files,
             config.max_concurrent_chunks,
             config.max_in_flight_requests,
@@ -150,6 +180,10 @@ class AudioTranscriptionPipeline:
         if self._http_client is not None:
             await self._http_client.aclose()
             self._http_client = None
+        if self._remote_seg is not None:
+            await self._remote_seg.aclose()
+        if self._remote_vad is not None:
+            await self._remote_vad.aclose()
         await self._client.aclose()
         if self._owns_executor:
             self._executor.shutdown(wait=True)
@@ -222,6 +256,171 @@ class AudioTranscriptionPipeline:
 
         return task, loaded_duration_sec, labeled, chunks, meta
 
+    @staticmethod
+    def _load_audio_cpu(
+        path: Path, config: PipelineConfig
+    ) -> tuple[LoadedAudio, bytes]:
+        """Sync CPU: load and encode full audio as WAV bytes for remote services."""
+        loaded = load_normalized_audio(
+            path, target_sr=config.target_sample_rate, mono=config.mono
+        )
+        wav_bytes = _samples_to_wav_bytes(loaded.samples, loaded.sample_rate)
+        return loaded, wav_bytes
+
+    @staticmethod
+    def _labeled_to_speech_spans(
+        labeled: list[LabeledSegment], config: PipelineConfig
+    ) -> list[TimeSpan]:
+        spans: list[TimeSpan] = []
+        for seg in labeled:
+            if seg.label == "speech":
+                spans.append(TimeSpan(seg.start, seg.end))
+                continue
+            if seg.label == "music" and not config.drop_music:
+                spans.append(TimeSpan(seg.start, seg.end))
+            elif seg.label == "noise" and not config.drop_noise:
+                spans.append(TimeSpan(seg.start, seg.end))
+            elif seg.label in ("silence", "unknown") and not config.drop_silence:
+                spans.append(TimeSpan(seg.start, seg.end))
+        return spans
+
+    @staticmethod
+    def _chunk_cpu(
+        task: AudioFileTask,
+        loaded: LoadedAudio,
+        spans: list[TimeSpan],
+        config: PipelineConfig,
+    ) -> tuple[list[AudioChunk], float]:
+        """Sync CPU: build chunks and extract WAV bytes. Returns (chunks, chunking_sec)."""
+        t0 = time.perf_counter()
+        chunk_spans = build_chunks_from_spans(task, spans, config)
+        chunks = spans_to_audio_chunks(task, chunk_spans)
+        samples = np.asarray(loaded.samples, dtype=np.float32)
+        sr = int(loaded.sample_rate)
+        for ch in chunks:
+            b, n = extract_span_to_wav_bytes(samples, sr, ch.start, ch.end)
+            ch.audio_bytes = b
+            ch.sample_rate = sr
+            ch.num_samples = n
+        return chunks, time.perf_counter() - t0
+
+    async def _prepare_file_remote(
+        self, path: Path
+    ) -> tuple[AudioFileTask, float, list[LabeledSegment], list[AudioChunk], dict]:
+        """Async path for remote segmentation / VAD backends."""
+        path = path.resolve()
+        task = AudioFileTask(source_path=path, file_id=path.stem)
+        fid = task.file_id
+        timings: dict[str, float] = {}
+
+        log.info("pipeline | file_id=%s | stage=prepare_remote_start | path=%s", fid, path)
+
+        loop = asyncio.get_running_loop()
+        loaded, wav_bytes = await loop.run_in_executor(
+            self._executor, self._load_audio_cpu, path, self.config
+        )
+        log.info(
+            "pipeline | file_id=%s | stage=audio_loaded | duration_sec=%.3f | wav_bytes=%d",
+            fid, loaded.duration_sec, len(wav_bytes),
+        )
+
+        cfg = self.config
+
+        if cfg.coarse_segmenter_backend == "remote":
+            assert self._remote_seg is not None
+            t0 = time.perf_counter()
+            labeled, _dur = await self._remote_seg.segment(
+                wav_bytes, duration_sec=loaded.duration_sec
+            )
+            timings["coarse_segmentation_sec"] = time.perf_counter() - t0
+        else:
+            from audio_asr_pipeline.preprocess import preprocess_audio as _local_preprocess
+
+            t0 = time.perf_counter()
+            _loaded2, spans_local, timings_local, labeled = await loop.run_in_executor(
+                self._executor, lambda: _local_preprocess(path, cfg, loaded=loaded)
+            )
+            timings["coarse_segmentation_sec"] = timings_local.get("coarse_segmentation_sec", 0.0)
+            if cfg.vad_backend != "remote":
+                timings["vad_sec"] = timings_local.get("vad_sec", 0.0)
+
+        label_counts = Counter(s.label for s in labeled)
+        log.info(
+            "pipeline | file_id=%s | stage=coarse_done | backend=%s | segments=%d | labels=%s | wall_sec=%.3f",
+            fid, cfg.coarse_segmenter_backend, len(labeled), dict(label_counts),
+            timings.get("coarse_segmentation_sec", 0.0),
+        )
+
+        speech_spans = self._labeled_to_speech_spans(labeled, cfg)
+        if not speech_spans:
+            raise SegmentationError(f"No speech spans after coarse segmentation: {path}")
+
+        if cfg.vad_backend == "remote":
+            assert self._remote_vad is not None
+            t1 = time.perf_counter()
+            refined = await self._remote_vad.refine(
+                wav_bytes,
+                speech_spans,
+                threshold=cfg.vad_threshold,
+                min_speech_duration_ms=cfg.min_speech_duration_ms,
+                min_silence_duration_ms=cfg.min_silence_duration_ms,
+                speech_pad_ms=cfg.speech_pad_ms,
+                merge_gap_seconds=cfg.merge_gap_seconds,
+            )
+            timings["vad_sec"] = time.perf_counter() - t1
+            log.info(
+                "pipeline | file_id=%s | stage=vad_done | backend=remote | refined_spans=%d | wall_sec=%.3f",
+                fid, len(refined), timings["vad_sec"],
+            )
+        elif cfg.vad_backend == "none":
+            timings.setdefault("vad_sec", 0.0)
+            refined = speech_spans
+        elif cfg.coarse_segmenter_backend == "remote":
+            from audio_asr_pipeline.vad import refine_speech_spans_with_silero
+
+            t1 = time.perf_counter()
+            refined = await loop.run_in_executor(
+                self._executor,
+                lambda: refine_speech_spans_with_silero(
+                    np.asarray(loaded.samples, dtype=np.float32),
+                    loaded.sample_rate,
+                    speech_spans,
+                    threshold=cfg.vad_threshold,
+                    min_speech_duration_ms=cfg.min_speech_duration_ms,
+                    min_silence_duration_ms=cfg.min_silence_duration_ms,
+                    speech_pad_ms=cfg.speech_pad_ms,
+                    merge_gap_seconds=cfg.merge_gap_seconds,
+                ),
+            )
+            timings["vad_sec"] = time.perf_counter() - t1
+        else:
+            refined = speech_spans
+            timings.setdefault("vad_sec", 0.0)
+
+        refined = [s for s in refined if (s.end - s.start) >= cfg.min_segment_duration_sec]
+        if not refined:
+            raise SegmentationError(f"No speech spans left after VAD/filter: {path}")
+
+        chunks, chunking_sec = await loop.run_in_executor(
+            self._executor, self._chunk_cpu, task, loaded, refined, cfg
+        )
+        timings["chunking_sec"] = chunking_sec
+        log.info(
+            "pipeline | file_id=%s | stage=chunking_done | chunks=%d | wall_sec=%.3f",
+            fid, len(chunks), chunking_sec,
+        )
+
+        kept_dur = sum(s.end - s.start for s in refined)
+        meta = _pipeline_meta_from_coarse(
+            labeled,
+            loaded_duration=loaded.duration_sec,
+            kept_spans_duration=kept_dur,
+            num_chunks=len(chunks),
+            config=cfg,
+        )
+        meta["timings_sec"] = timings
+        return task, float(loaded.duration_sec), labeled, chunks, meta
+
     async def process_file(self, path: Path) -> PipelineResult:
         results = await self.process_files([path])
         return results[0]
@@ -267,12 +466,17 @@ class AudioTranscriptionPipeline:
         path = path.resolve()
         fid = path.stem
         try:
-            loop = asyncio.get_running_loop()
-            task, duration_sec, _labeled, chunks, meta = await loop.run_in_executor(
-                self._executor,
-                self._prepare_file_cpu,
-                path,
-            )
+            if self._use_remote_preprocess:
+                task, duration_sec, _labeled, chunks, meta = (
+                    await self._prepare_file_remote(path)
+                )
+            else:
+                loop = asyncio.get_running_loop()
+                task, duration_sec, _labeled, chunks, meta = await loop.run_in_executor(
+                    self._executor,
+                    self._prepare_file_cpu,
+                    path,
+                )
         except Exception as e:
             log.exception(
                 "pipeline | file_id=%s | stage=prepare_failed | path=%s",

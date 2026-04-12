@@ -24,7 +24,7 @@ eval = ["jiwer>=3.0.0", "openpyxl>=3.1.0"]
 ina = ["inaSpeechSegmenter>=0.7.0"]
 
 [dependency-groups]
-dev = ["pytest>=8.0.0"]
+dev = ["pytest>=8.0.0", "pytest-asyncio>=0.24.0"]
 eval = ["jiwer>=3.0.0", "openpyxl>=3.1.0"]
 ina = ["inaSpeechSegmenter>=0.7.0"]
 
@@ -42,3 +42,6 @@ override-dependencies = [
     "tensorflow==2.21.0; sys_platform == 'win32'",
 ]
 default-groups = ["dev", "eval", "ina"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"

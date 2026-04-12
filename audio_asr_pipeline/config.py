@@ -7,8 +7,8 @@ from typing import Literal, Self
 
 from pydantic import BaseModel, Field, model_validator
 
-CoarseBackendName = Literal["whole_file", "ina"]
-VADBackendName = Literal["silero", "none"]
+CoarseBackendName = Literal["whole_file", "ina", "remote"]
+VADBackendName = Literal["silero", "none", "remote"]
 STTBackendName = Literal["httpx", "openai", "gemma"]
 GemmaApiStyle = Literal["ollama_native", "openai_chat"]
 
@@ -78,6 +78,12 @@ class PipelineConfig(BaseModel):
 
     max_chunk_duration_sec: float = 28.0
     min_chunk_duration_sec: float = 0.5
+
+    # Remote GPU service URLs (used when coarse_segmenter_backend / vad_backend = "remote")
+    segmentation_service_url: str = "http://127.0.0.1:8001"
+    vad_service_url: str = "http://127.0.0.1:8002"
+    remote_request_timeout_sec: float = 120.0
+    remote_connect_timeout_sec: float = 10.0
 
     vllm: VLLMTranscribeConfig = Field(default_factory=VLLMTranscribeConfig)
 

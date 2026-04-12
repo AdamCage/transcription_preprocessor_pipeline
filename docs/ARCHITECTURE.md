@@ -190,7 +190,79 @@ sequenceDiagram
 
 Важно: **`max_concurrent_files`** задаёт размер **общего** `asyncio.Semaphore` на экземпляр `AudioTranscriptionPipeline`, поэтому параллельно полностью обрабатывается не больше этого числа файлов (стерео занимает два слота, если каналы гоняются параллельно).
 
-## 8. Ошибки и краевые случаи
+## 8. Remote GPU Services (production)
+
+Для production-масштаба сегментация и VAD выносятся в отдельные FastAPI GPU-сервисы. Библиотека вызывает их по HTTP при `coarse_segmenter_backend="remote"` и/или `vad_backend="remote"`.
+
+```mermaid
+flowchart TB
+    subgraph airflow_vm["Airflow VM (CPU)"]
+        DAG["Airflow DAG"]
+        LIB["audio_asr_pipeline\n(remote backends)"]
+        DAG --> LIB
+    end
+    subgraph gpu_vm["GPU VM"]
+        SEG["Segmentation Service\nFastAPI + pyannote\n:8001"]
+        VAD_SVC["VAD Service\nFastAPI + Silero GPU\n:8002"]
+        STT["STT Service\nvLLM + Whisper\n:8000"]
+    end
+    LIB -->|"POST /segment\naudio bytes"| SEG
+    LIB -->|"POST /refine\naudio + spans"| VAD_SVC
+    LIB -->|"POST /v1/audio/transcriptions\nWAV chunks"| STT
+```
+
+### Последовательность: один файл (remote)
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Caller as Airflow / eval
+    participant Pipe as Pipeline
+    participant Exec as Executor
+    participant SegSvc as Segmentation :8001
+    participant VadSvc as VAD :8002
+    participant STT as STT :8000
+
+    Caller->>Pipe: process_file(path)
+    Pipe->>Exec: load_audio_cpu(path)
+    Exec-->>Pipe: LoadedAudio + wav_bytes
+    Pipe->>SegSvc: POST /segment (wav_bytes)
+    SegSvc-->>Pipe: LabeledSegment[]
+    Pipe->>VadSvc: POST /refine (wav_bytes, spans)
+    VadSvc-->>Pipe: refined TimeSpan[]
+    Pipe->>Exec: chunk_cpu(loaded, spans)
+    Exec-->>Pipe: AudioChunk[]
+    loop each chunk
+        Pipe->>STT: POST /v1/audio/transcriptions
+        STT-->>Pipe: JSON
+    end
+    Pipe-->>Caller: PipelineResult
+```
+
+### Ключевые модули
+
+| Модуль | Роль |
+|--------|------|
+| `remote_clients.py` | `RemoteSegmentationClient`, `RemoteVADClient` — async httpx клиенты |
+| `services/segmentation_service/` | FastAPI + pyannote.audio on GPU |
+| `services/vad_service/` | FastAPI + Silero VAD JIT on GPU |
+
+### Конфигурация
+
+```python
+PipelineConfig(
+    coarse_segmenter_backend="remote",
+    vad_backend="remote",
+    segmentation_service_url="http://gpu-host:8001",
+    vad_service_url="http://gpu-host:8002",
+    remote_request_timeout_sec=120.0,
+    remote_connect_timeout_sec=10.0,
+)
+```
+
+Совместимость: `coarse_segmenter_backend="ina"` + `vad_backend="remote"` (или наоборот) тоже поддерживается — локальный и remote бэкенды можно комбинировать.
+
+## 9. Ошибки и краевые случаи
 
 | Исключение | Когда |
 |------------|--------|
@@ -218,10 +290,11 @@ sequenceDiagram
 
 | Модуль | Ответственность |
 |--------|-----------------|
-| `pipeline.py` | Точка входа async, семафор файлов, `_prepare_file_cpu`, `_transcribe_all` |
-| `preprocess.py` | Склейка coarse + VAD + фильтры span |
+| `pipeline.py` | Точка входа async, семафор файлов, `_prepare_file_cpu` / `_prepare_file_remote`, `_transcribe_all` |
+| `preprocess.py` | Склейка coarse + VAD + фильтры span (local backends) |
 | `segmenters.py` | ina (в т.ч. female/male → speech), whole_file |
-| `vad.py` | Silero ONNX, паддинг/мердж промежутков |
+| `vad.py` | Silero ONNX, паддинг/мердж промежутков (local) |
+| `remote_clients.py` | `RemoteSegmentationClient`, `RemoteVADClient` — async HTTP-клиенты GPU-сервисов |
 | `chunking.py` | Ограничение длины чанка, `AudioChunk` |
 | `transcribe.py` | STT clients: `OpenAITranscriptionClient` (openai lib) / `VLLMTranscriptionClient` (httpx) |
 | `merge.py` | Таймкоды, итоговый текст |

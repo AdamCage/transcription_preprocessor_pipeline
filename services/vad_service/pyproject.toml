@@ -1,0 +1,39 @@
+[project]
+name = "vad-service"
+version = "0.1.0"
+description = "GPU-accelerated Voice Activity Detection service using Silero VAD. Refines coarse speech spans into precise speech boundaries."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "pydantic>=2.5.0",
+    "pydantic-settings>=2.2.0",
+    "torch>=2.1.0",
+    "torchaudio>=2.1.0",
+    "soundfile>=0.12.1",
+    "numpy>=1.26.0",
+    "python-multipart>=0.0.9",
+    "packaging>=23.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0.0", "pytest-asyncio>=0.24.0", "httpx>=0.27.0"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["vad_service"]
+
+# PyTorch CUDA wheels live on a separate index.
+# `uv sync` will pull GPU-enabled torch from here when available.
+[[tool.uv.index]]
+name = "pytorch-cu124"
+url = "https://download.pytorch.org/whl/cu124"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu124" }
+torchaudio = { index = "pytorch-cu124" }

@@ -7,8 +7,8 @@
 ## Конвейер данных (кратко)
 
 1. Загрузка WAV → нормализация сэмплрейта / моно (по конфигу).
-2. **Coarse** (`ina` или `whole_file`) → интервалы с метками.
-3. **VAD** уточняет границы речи; фильтрация музыки/шума/тишины по конфигу.
+2. **Coarse** (`ina`, `whole_file` или `remote` — GPU-сервис pyannote) → интервалы с метками.
+3. **VAD** уточняет границы речи (`silero`, `remote` — GPU-сервис, или `none`); фильтрация по конфигу.
 4. **Chunking** — WAV-байты на чанк для HTTP.
 5. **Transcribe** — вызов STT через один из трёх бэкендов (см. ниже); лимит `max_in_flight_requests`.
 6. **Merge** — итоговый текст и `verbose_json`.
@@ -52,14 +52,15 @@ flowchart TB
 
 | Модуль | Роль |
 |--------|------|
-| `pipeline.py` | `AudioTranscriptionPipeline`, `process_file_sync`, оркестрация |
-| `preprocess.py` | coarse + VAD + спаны |
+| `pipeline.py` | `AudioTranscriptionPipeline`, `process_file_sync`, оркестрация (local + remote) |
+| `preprocess.py` | coarse + VAD + спаны (local backends) |
 | `segmenters.py` | `ina` / `whole_file` |
-| `vad.py` | Silero ONNX |
+| `vad.py` | Silero ONNX (local) |
+| `remote_clients.py` | `RemoteSegmentationClient`, `RemoteVADClient` — HTTP-клиенты GPU-сервисов |
 | `chunking.py` | ограничения длины чанка |
 | `transcribe.py` | STT: `OpenAITranscriptionClient` (openai lib) / `VLLMTranscriptionClient` (httpx) / `GemmaTranscriptionClient` (chat API); ретраи / 429 |
 | `merge.py` | склейка ответов |
-| `config.py` | `PipelineConfig`, `VLLMTranscribeConfig` |
+| `config.py` | `PipelineConfig`, `VLLMTranscribeConfig`, service URLs |
 
 Результат **`PipelineResult`**: `text`, `verbose_json`, `stats`, опционально **`error`** — при `fail_fast=False` сбой одного файла в батче не валит остальные (см. [ARCHITECTURE.md](docs/ARCHITECTURE.md)).
 
@@ -146,8 +147,11 @@ uv run python scripts/eval_test_audio.py \
 | `--model` | `large-v3-turbo` | Название модели Whisper на сервере. Передаётся в поле `model` запроса. |
 | `--language` | нет (авто) | Код языка ISO 639-1 (`ru`, `en`, `de` и т.д.). Если не задан, модель определяет язык автоматически. |
 | `--concurrency` | `3` | Максимум файлов, обрабатываемых параллельно (препроцессинг + STT). В стерео-режиме один WAV занимает два слота (по каналу). Рекомендуется ставить кратно числу GPU-воркеров на STT-сервере. |
-| `--coarse-backend` | `ina` | Грубый сегментатор: `ina` (inaSpeechSegmenter — отделяет речь от музыки/шума) или `whole_file` (всё аудио считается речью, быстрее, но без фильтрации). |
+| `--coarse-backend` | `ina` | Грубый сегментатор: `ina` (inaSpeechSegmenter), `whole_file` (всё = речь) или `remote` (GPU-сервис pyannote, см. `--segmentation-url`). |
 | `--ina-allow-gpu` | выкл | Разрешить TensorFlow (для ina) использовать GPU. По умолчанию ina работает на CPU. |
+| `--segmentation-url` | `http://127.0.0.1:8001` | URL remote-сервиса сегментации (для `--coarse-backend remote`). |
+| `--vad-url` | `http://127.0.0.1:8002` | URL remote-сервиса VAD (для `--vad-backend remote`). |
+| `--vad-backend` | `silero` | Бэкенд VAD: `silero` (локальный CPU), `remote` (GPU-сервис) или `none` (пропустить). Перекрывает `--no-vad`. |
 | `--output-dir` | `eval_runs/<UTC_timestamp>` | Директория для результатов. Внутри создаются `report.xlsx`, `verbose_json/`, `stereo_mono_wav/`, `eval.log`. |
 | `-v` / `--verbose` | выкл | Включает уровень DEBUG для eval-скрипта и пакета `audio_asr_pipeline`. Показывает каждый POST в STT, семафоры, тайминги. |
 | `--log-level` | `INFO` | Уровень логирования (`DEBUG`, `INFO`, `WARNING`, `ERROR`). `-v` форсирует `DEBUG`. |
@@ -181,6 +185,71 @@ eval_results/
 Паттерны интеграции (async `await pipeline.process_file` vs **`process_file_sync`** в синхронных тасках, вложенный event loop, XCom, **`expand` по списку путей**): [docs/AIRFLOW.md](docs/AIRFLOW.md).
 
 Рекомендация: **`audio_asr_pipeline` ставить в образ/venv воркера** (`pip install .` / wheel), а не копировать исходники в DAG. Пример двух DAG (стерео call-center + моно) и тонкий слой **`plugins/asr_helpers`**: [airflow_scaffold/README.md](airflow_scaffold/README.md).
+
+## Remote GPU Services (Segmentation + VAD)
+
+Для production-масштаба (тысячи файлов через Airflow) сегментация и VAD выносятся в отдельные **FastAPI GPU-сервисы**. Библиотека вызывает их по HTTP через `coarse_segmenter_backend="remote"` и `vad_backend="remote"`.
+
+### Архитектура
+
+```mermaid
+flowchart TB
+    subgraph airflow_vm["Airflow VM (CPU)"]
+        LIB["audio_asr_pipeline\n(remote backends)"]
+    end
+    subgraph gpu_vm["GPU VM"]
+        SEG["Segmentation Service\npyannote :8001"]
+        VAD_SVC["VAD Service\nSilero GPU :8002"]
+        STT["STT Service\nvLLM Whisper :8000"]
+    end
+    LIB -->|"POST /segment"| SEG
+    LIB -->|"POST /refine"| VAD_SVC
+    LIB -->|"POST /v1/audio/transcriptions"| STT
+```
+
+### Запуск сервисов
+
+```bash
+# Segmentation Service (pyannote, GPU)
+cd services/segmentation_service
+export SEG_HF_TOKEN="hf_..."
+uvicorn segmentation_service.app:app --host 0.0.0.0 --port 8001
+
+# VAD Service (Silero, GPU)
+cd services/vad_service
+uvicorn vad_service.app:app --host 0.0.0.0 --port 8002
+```
+
+### Eval с remote backends
+
+```bash
+uv run python scripts/eval_test_audio.py \
+  --coarse-backend remote \
+  --segmentation-url http://gpu-host:8001 \
+  --vad-backend remote \
+  --vad-url http://gpu-host:8002 \
+  --audio-dir test_audio \
+  --base-url http://gpu-host:8000 \
+  --concurrency 10
+```
+
+### Программный API
+
+```python
+from audio_asr_pipeline import PipelineConfig, AudioTranscriptionPipeline
+
+cfg = PipelineConfig(
+    coarse_segmenter_backend="remote",
+    vad_backend="remote",
+    segmentation_service_url="http://gpu-host:8001",
+    vad_service_url="http://gpu-host:8002",
+)
+
+async with AudioTranscriptionPipeline(cfg) as pipeline:
+    result = await pipeline.process_file(Path("audio.wav"))
+```
+
+Подробная документация сервисов: [services/segmentation_service/README.md](services/segmentation_service/README.md) и [services/vad_service/README.md](services/vad_service/README.md).
 
 ## Gemma-4 ASR (chat-based STT)
 

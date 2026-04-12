@@ -864,13 +864,22 @@ async def _run(args: argparse.Namespace, out_root: Path) -> int:
     if args.stt_backend == "gemma":
         vllm_kwargs["gemma_api_style"] = args.gemma_api_style
 
+    if args.vad_backend is not None:
+        vad_be = args.vad_backend
+    elif args.no_vad:
+        vad_be = "none"
+    else:
+        vad_be = "silero"
+
     cfg = PipelineConfig(
         max_concurrent_files=args.concurrency,
         max_concurrent_chunks=args.concurrency,
         max_in_flight_requests=max(8, args.concurrency * 2),
         coarse_segmenter_backend=args.coarse_backend,  # type: ignore[arg-type]
         ina_force_cpu=not args.ina_allow_gpu,
-        vad_backend="none" if args.no_vad else "silero",
+        vad_backend=vad_be,  # type: ignore[arg-type]
+        segmentation_service_url=args.segmentation_url,
+        vad_service_url=args.vad_url,
         vllm=VLLMTranscribeConfig(**vllm_kwargs),
     )
     log.info("pipeline_config | %s", cfg.model_dump(mode="json"))
@@ -1164,17 +1173,37 @@ def main() -> None:
     )
     p.add_argument(
         "--coarse-backend",
-        choices=("whole_file", "ina"),
+        choices=("whole_file", "ina", "remote"),
         default=DEFAULT_COARSE_SEGMENTER_BACKEND,
         help=(
-            "Coarse segmenter: ina (inaSpeechSegmenter) or whole_file. "
-            "Default matches PipelineConfig. ina requires installing inaSpeechSegmenter in the venv."
+            "Coarse segmenter: ina (inaSpeechSegmenter), whole_file, or remote (GPU service). "
+            "Default matches PipelineConfig. ina requires installing inaSpeechSegmenter in the venv. "
+            "remote requires a running segmentation service (see --segmentation-url)."
         ),
     )
     p.add_argument(
         "--ina-allow-gpu",
         action="store_true",
         help="Let TensorFlow use GPU for inaSpeechSegmenter (default: CPU only)",
+    )
+    p.add_argument(
+        "--segmentation-url",
+        default="http://127.0.0.1:8001",
+        help="URL of the remote segmentation service (used with --coarse-backend remote). Default: http://127.0.0.1:8001",
+    )
+    p.add_argument(
+        "--vad-url",
+        default="http://127.0.0.1:8002",
+        help="URL of the remote VAD service (used with --vad-backend remote). Default: http://127.0.0.1:8002",
+    )
+    p.add_argument(
+        "--vad-backend",
+        choices=("silero", "none", "remote"),
+        default=None,
+        help=(
+            "VAD backend: silero (local CPU), remote (GPU service), or none (skip). "
+            "Default: silero. Overrides --no-vad when set explicitly."
+        ),
     )
     p.add_argument(
         "--stereo-call",
