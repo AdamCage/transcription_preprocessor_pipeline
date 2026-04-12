@@ -111,6 +111,33 @@ class PyannoteSegmenter:
         except (ImportError, ModuleNotFoundError):
             pass
 
+    @staticmethod
+    def _stub_missing_speechbrain_modules() -> None:
+        """Replace speechbrain ``LazyModule`` sentinels with real empty modules.
+
+        pytorch_lightning's ``load_from_checkpoint`` calls ``inspect.stack()``,
+        and CPython's ``inspect.getmodule`` probes ``__file__`` on every entry
+        in ``sys.modules``.  speechbrain registers ``LazyModule`` sentinels for
+        optional integrations (k2_fsa, huggingface, etc.); accessing
+        ``__file__`` triggers the lazy import, which raises ``ImportError``
+        when the optional dependency is absent.  Replacing all ``LazyModule``
+        entries with real (empty) module objects prevents the lazy loader from
+        ever firing during frame introspection.
+        """
+        import sys
+        import types
+
+        lazy_type = None
+        try:
+            from speechbrain.utils.importutils import LazyModule as _LM
+            lazy_type = _LM
+        except ImportError:
+            return
+
+        for mod_name, mod_obj in list(sys.modules.items()):
+            if isinstance(mod_obj, lazy_type):
+                sys.modules[mod_name] = types.ModuleType(mod_name)
+
     def load(self) -> None:
         import os
 
@@ -121,6 +148,7 @@ class PyannoteSegmenter:
             os.environ["HF_TOKEN"] = self._hf_token
 
         self._patch_hf_auth()
+        self._stub_missing_speechbrain_modules()
 
         from pyannote.audio import Model  # type: ignore[import-untyped]
         from pyannote.audio.pipelines import VoiceActivityDetection  # type: ignore[import-untyped]
