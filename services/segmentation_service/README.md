@@ -4,10 +4,10 @@ GPU-accelerated speech segmentation service using **pyannote.audio**. Classifies
 
 ## Architecture
 
-- **Model:** `pyannote/voice-activity-detection` (configurable via `SEG_MODEL_NAME`)
+- **Model:** `pyannote/segmentation-3.0` loaded via `Model.from_pretrained` + `VoiceActivityDetection` pipeline (configurable via `SEG_MODEL_NAME` / `SEG_MODEL_PATH`)
 - **Runtime:** FastAPI + uvicorn, GPU inference via PyTorch
 - **Concurrency:** `asyncio.Semaphore` + `ThreadPoolExecutor` (pyannote is blocking)
-- **Memory:** ~300MB VRAM per model instance; scale via uvicorn `--workers`
+- **Memory:** ~300MB VRAM per model instance
 
 ## Quick Start
 
@@ -20,6 +20,9 @@ uv sync
 # Set HuggingFace token (required for pyannote models)
 export SEG_HF_TOKEN="hf_..."
 
+# Or point to a local model snapshot
+export SEG_MODEL_PATH="/path/to/models--pyannote--segmentation-3.0/snapshots/<hash>"
+
 # Start the service
 uvicorn segmentation_service.app:app --host 0.0.0.0 --port 8001
 ```
@@ -30,14 +33,22 @@ All settings are via environment variables (prefix `SEG_`):
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `SEG_MODEL_NAME` | `pyannote/voice-activity-detection` | pyannote pipeline name |
+| `SEG_MODEL_NAME` | `pyannote/segmentation-3.0` | pyannote model name (HF repo ID) |
+| `SEG_MODEL_PATH` | `""` | Local path to model snapshot (overrides HF download) |
 | `SEG_HF_TOKEN` | `""` | HuggingFace auth token |
 | `SEG_DEVICE` | `cuda:0` | PyTorch device |
-| `SEG_MAX_CONCURRENCY` | `4` | Max concurrent inference requests |
-| `SEG_EXECUTOR_WORKERS` | `4` | Thread pool size for blocking inference |
+| `SEG_DTYPE` | `float32` | Inference precision: `float32`, `float16`, `bfloat16` |
+| `SEG_MAX_CONCURRENCY` | `4` | Max queued/concurrent requests (semaphore) |
+| `SEG_INFERENCE_TIMEOUT_SEC` | `300` | Per-request GPU inference timeout |
+| `SEG_MAX_AUDIO_BYTES` | `209715200` (200 MB) | Reject uploads larger than this |
+| `SEG_MAX_AUDIO_DURATION_SEC` | `3600` | Reject audio longer than this |
+| `SEG_MIN_DURATION_ON` | `0.0` | VAD: remove speech regions shorter than this (seconds) |
+| `SEG_MIN_DURATION_OFF` | `0.0` | VAD: fill non-speech gaps shorter than this (seconds) |
 | `SEG_HOST` | `0.0.0.0` | Bind host |
 | `SEG_PORT` | `8001` | Bind port |
 | `SEG_LOG_LEVEL` | `info` | Log level |
+| `SEG_LOG_DIR` | `logs` | Directory for rotated log files |
+| `SEG_LOG_RETENTION_DAYS` | `30` | Number of daily log backups to keep |
 
 ## API Reference
 
@@ -60,8 +71,10 @@ Segment audio into speech/non-speech regions.
 ```
 
 **Errors:**
-- `422` — invalid/empty audio or unsupported content type
-- `500` — inference failure
+- `413` -- audio payload exceeds `SEG_MAX_AUDIO_BYTES`
+- `422` -- invalid/empty audio, unsupported content type, or duration exceeds limit
+- `504` -- inference timed out (`SEG_INFERENCE_TIMEOUT_SEC`)
+- `500` -- inference failure
 
 ### `GET /health`
 
@@ -69,7 +82,7 @@ Segment audio into speech/non-speech regions.
 ```json
 {
   "status": "ok",
-  "model": "pyannote/voice-activity-detection",
+  "model": "pyannote/segmentation-3.0",
   "device": "cuda:0",
   "gpu_memory_used_mb": 312.5,
   "gpu_memory_total_mb": 16384.0
@@ -78,19 +91,36 @@ Segment audio into speech/non-speech regions.
 
 ## GPU Scaling
 
-| GPU | VRAM | Recommended workers |
-|-----|------|-------------------|
-| RTX 4080 Super | 16 GB | 4–8 |
-| L40 | 48 GB | 16–32 |
-| RTX 6000 Pro Blackwell | 96 GB | 32–64 |
+Run a **single uvicorn process** (no `--workers N`). Each uvicorn worker loads its own
+model copy, wasting VRAM. Instead, tune `SEG_MAX_CONCURRENCY` to control how many
+requests queue while the single-threaded GPU executor processes them sequentially.
 
-Scale with: `uvicorn segmentation_service.app:app --workers N`
+| GPU | VRAM | Recommended `SEG_MAX_CONCURRENCY` |
+|-----|------|----------------------------------|
+| RTX 4080 Super | 16 GB | 8 |
+| L40 | 48 GB | 24 |
+| RTX 6000 Pro Blackwell | 96 GB | 48 |
+
+## Docker
+
+```bash
+# Build (pass HF token for model pre-download)
+docker compose build --build-arg SEG_HF_TOKEN=hf_...
+
+# Run with GPU
+docker compose up -d
+```
+
+See `docker-compose.yml` for GPU reservation and environment configuration.
 
 ## Testing
 
 ```bash
 uv sync --group dev
 uv run python -m pytest tests/ -v
+
+# Integration tests against real audio (requires model)
+uv run python -m pytest tests/test_integration_audio.py -v -s
 ```
 
 ## Integration with audio_asr_pipeline

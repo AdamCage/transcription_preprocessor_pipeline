@@ -1,0 +1,986 @@
+{
+  "timestamp": "2026-04-12T11:21:55.021686+00:00",
+  "model": "pyannote/segmentation-3.0",
+  "model_path": "C:\\Users\\AdamCage\\.cache\\huggingface\\hub\\models--pyannote--segmentation-3.0\\snapshots\\e66f3d3b9eb0873085418a7b813d3b369bf160bb\\pytorch_model.bin",
+  "device": "cuda:0",
+  "dtype": "float32",
+  "results": [
+    {
+      "file": "voice_02-04-2026_23-18-27.wav",
+      "size_bytes": 1397348,
+      "duration_sec": 354.7335,
+      "num_segments": 193,
+      "num_speech": 96,
+      "num_non_speech": 97,
+      "inference_wall_sec": 0.7087,
+      "rtf": 0.001998,
+      "segments": [
+        {
+          "start": 0.0,
+          "end": 0.031,
+          "label": "non_speech"
+        },
+        {
+          "start": 0.031,
+          "end": 0.0985,
+          "label": "speech"
+        },
+        {
+          "start": 0.0985,
+          "end": 0.1997,
+          "label": "non_speech"
+        },
+        {
+          "start": 0.1997,
+          "end": 7.1185,
+          "label": "speech"
+        },
+        {
+          "start": 7.1185,
+          "end": 7.7766,
+          "label": "non_speech"
+        },
+        {
+          "start": 7.7766,
+          "end": 9.9366,
+          "label": "speech"
+        },
+        {
+          "start": 9.9366,
+          "end": 10.9153,
+          "label": "non_speech"
+        },
+        {
+          "start": 10.9153,
+          "end": 15.5222,
+          "label": "speech"
+        },
+        {
+          "start": 15.5222,
+          "end": 16.0285,
+          "label": "non_speech"
+        },
+        {
+          "start": 16.0285,
+          "end": 16.771,
+          "label": "speech"
+        },
+        {
+          "start": 16.771,
+          "end": 17.0072,
+          "label": "non_speech"
+        },
+        {
+          "start": 17.0072,
+          "end": 17.716,
+          "label": "speech"
+        },
+        {
+          "start": 17.716,
+          "end": 18.121,
+          "label": "non_speech"
+        },
+        {
+          "start": 18.121,
+          "end": 20.2978,
+          "label": "speech"
+        },
+        {
+          "start": 20.2978,
+          "end": 21.2091,
+          "label": "non_speech"
+        },
+        {
+          "start": 21.2091,
+          "end": 22.5253,
+          "label": "speech"
+        },
+        {
+          "start": 22.5253,
+          "end": 23.5716,
+          "label": "non_speech"
+        },
+        {
+          "start": 23.5716,
+          "end": 26.2378,
+          "label": "speech"
+        },
+        {
+          "start": 26.2378,
+          "end": 27.1491,
+          "label": "non_speech"
+        },
+        {
+          "start": 27.1491,
+          "end": 27.8072,
+          "label": "speech"
+        },
+        {
+          "start": 27.8072,
+          "end": 28.4147,
+          "label": "non_speech"
+        },
+        {
+          "start": 28.4147,
+          "end": 32.0766,
+          "label": "speech"
+        },
+        {
+          "start": 32.0766,
+          "end": 32.6841,
+          "label": "non_speech"
+        },
+        {
+          "start": 32.6841,
+          "end": 35.5191,
+          "label": "speech"
+        },
+        {
+          "start": 35.5191,
+          "end": 35.6203,
+          "label": "non_speech"
+        },
+        {
+          "start": 35.6203,
+          "end": 35.7722,
+          "label": "speech"
+        },
+        {
+          "start": 35.7722,
+          "end": 35.8735,
+          "label": "non_speech"
+        },
+        {
+          "start": 35.8735,
+          "end": 37.7635,
+          "label": "speech"
+        },
+        {
+          "start": 37.7635,
+          "end": 37.8816,
+          "label": "non_speech"
+        },
+        {
+          "start": 37.8816,
+          "end": 41.7628,
+          "label": "speech"
+        },
+        {
+          "start": 41.7628,
+          "end": 42.3703,
+          "label": "non_speech"
+        },
+        {
+          "start": 42.3703,
+          "end": 46.6228,
+          "label": "speech"
+        },
+        {
+          "start": 46.6228,
+          "end": 46.8422,
+          "label": "non_speech"
+        },
+        {
+          "start": 46.8422,
+          "end": 48.4116,
+          "label": "speech"
+        },
+        {
+          "start": 48.4116,
+          "end": 49.2047,
+          "label": "non_speech"
+        },
+        {
+          "start": 49.2047,
+          "end": 49.9303,
+          "label": "speech"
+        },
+        {
+          "start": 49.9303,
+          "end": 50.7235,
+          "label": "non_speech"
+        },
+        {
+          "start": 50.7235,
+          "end": 51.6516,
+          "label": "speech"
+        },
+        {
+          "start": 51.6516,
+          "end": 52.7822,
+          "label": "non_speech"
+        },
+        {
+          "start": 52.7822,
+          "end": 54.1828,
+          "label": "speech"
+        },
+        {
+          "start": 54.1828,
+          "end": 55.1616,
+          "label": "non_speech"
+        },
+        {
+          "start": 55.1616,
+          "end": 57.136,
+          "label": "speech"
+        },
+        {
+          "start": 57.136,
+          "end": 57.271,
+          "label": "non_speech"
+        },
+        {
+          "start": 57.271,
+          "end": 57.8785,
+          "label": "speech"
+        },
+        {
+          "start": 57.8785,
+          "end": 59.1103,
+          "label": "non_speech"
+        },
+        {
+          "start": 59.1103,
+          "end": 60.3928,
+          "label": "speech"
+        },
+        {
+          "start": 60.3928,
+          "end": 61.0172,
+          "label": "non_speech"
+        },
+        {
+          "start": 61.0172,
+          "end": 62.4685,
+          "label": "speech"
+        },
+        {
+          "start": 62.4685,
+          "end": 63.8691,
+          "label": "non_speech"
+        },
+        {
+          "start": 63.8691,
+          "end": 64.831,
+          "label": "speech"
+        },
+        {
+          "start": 64.831,
+          "end": 66.0797,
+          "label": "non_speech"
+        },
+        {
+          "start": 66.0797,
+          "end": 66.9235,
+          "label": "speech"
+        },
+        {
+          "start": 66.9235,
+          "end": 67.0416,
+          "label": "non_speech"
+        },
+        {
+          "start": 67.0416,
+          "end": 67.6153,
+          "label": "speech"
+        },
+        {
+          "start": 67.6153,
+          "end": 68.3072,
+          "label": "non_speech"
+        },
+        {
+          "start": 68.3072,
+          "end": 73.0153,
+          "label": "speech"
+        },
+        {
+          "start": 73.0153,
+          "end": 73.4878,
+          "label": "non_speech"
+        },
+        {
+          "start": 73.4878,
+          "end": 78.8541,
+          "label": "speech"
+        },
+        {
+          "start": 78.8541,
+          "end": 79.3941,
+          "label": "non_speech"
+        },
+        {
+          "start": 79.3941,
+          "end": 80.7272,
+          "label": "speech"
+        },
+        {
+          "start": 80.7272,
+          "end": 81.5035,
+          "label": "non_speech"
+        },
+        {
+          "start": 81.5035,
+          "end": 82.9547,
+          "label": "speech"
+        },
+        {
+          "start": 82.9547,
+          "end": 83.8997,
+          "label": "non_speech"
+        },
+        {
+          "start": 83.8997,
+          "end": 84.4228,
+          "label": "speech"
+        },
+        {
+          "start": 84.4228,
+          "end": 85.081,
+          "label": "non_speech"
+        },
+        {
+          "start": 85.081,
+          "end": 86.0428,
+          "label": "speech"
+        },
+        {
+          "start": 86.0428,
+          "end": 86.7178,
+          "label": "non_speech"
+        },
+        {
+          "start": 86.7178,
+          "end": 87.9835,
+          "label": "speech"
+        },
+        {
+          "start": 87.9835,
+          "end": 89.266,
+          "label": "non_speech"
+        },
+        {
+          "start": 89.266,
+          "end": 90.9197,
+          "label": "speech"
+        },
+        {
+          "start": 90.9197,
+          "end": 91.7466,
+          "label": "non_speech"
+        },
+        {
+          "start": 91.7466,
+          "end": 92.3541,
+          "label": "speech"
+        },
+        {
+          "start": 92.3541,
+          "end": 93.181,
+          "label": "non_speech"
+        },
+        {
+          "start": 93.181,
+          "end": 95.8303,
+          "label": "speech"
+        },
+        {
+          "start": 95.8303,
+          "end": 96.7922,
+          "label": "non_speech"
+        },
+        {
+          "start": 96.7922,
+          "end": 103.7447,
+          "label": "speech"
+        },
+        {
+          "start": 103.7447,
+          "end": 104.8247,
+          "label": "non_speech"
+        },
+        {
+          "start": 104.8247,
+          "end": 105.5503,
+          "label": "speech"
+        },
+        {
+          "start": 105.5503,
+          "end": 105.5672,
+          "label": "non_speech"
+        },
+        {
+          "start": 105.5672,
+          "end": 105.601,
+          "label": "speech"
+        },
+        {
+          "start": 105.601,
+          "end": 105.8878,
+          "label": "non_speech"
+        },
+        {
+          "start": 105.8878,
+          "end": 107.3053,
+          "label": "speech"
+        },
+        {
+          "start": 107.3053,
+          "end": 107.4741,
+          "label": "non_speech"
+        },
+        {
+          "start": 107.4741,
+          "end": 109.7185,
+          "label": "speech"
+        },
+        {
+          "start": 109.7185,
+          "end": 110.3091,
+          "label": "non_speech"
+        },
+        {
+          "start": 110.3091,
+          "end": 113.4816,
+          "label": "speech"
+        },
+        {
+          "start": 113.4816,
+          "end": 113.4985,
+          "label": "non_speech"
+        },
+        {
+          "start": 113.4985,
+          "end": 113.5491,
+          "label": "speech"
+        },
+        {
+          "start": 113.5491,
+          "end": 113.6166,
+          "label": "non_speech"
+        },
+        {
+          "start": 113.6166,
+          "end": 117.481,
+          "label": "speech"
+        },
+        {
+          "start": 117.481,
+          "end": 117.9703,
+          "label": "non_speech"
+        },
+        {
+          "start": 117.9703,
+          "end": 119.2528,
+          "label": "speech"
+        },
+        {
+          "start": 119.2528,
+          "end": 120.4003,
+          "label": "non_speech"
+        },
+        {
+          "start": 120.4003,
+          "end": 121.0753,
+          "label": "speech"
+        },
+        {
+          "start": 121.0753,
+          "end": 122.1216,
+          "label": "non_speech"
+        },
+        {
+          "start": 122.1216,
+          "end": 126.0366,
+          "label": "speech"
+        },
+        {
+          "start": 126.0366,
+          "end": 126.5597,
+          "label": "non_speech"
+        },
+        {
+          "start": 126.5597,
+          "end": 129.0403,
+          "label": "speech"
+        },
+        {
+          "start": 129.0403,
+          "end": 129.9516,
+          "label": "non_speech"
+        },
+        {
+          "start": 129.9516,
+          "end": 132.6178,
+          "label": "speech"
+        },
+        {
+          "start": 132.6178,
+          "end": 133.4616,
+          "label": "non_speech"
+        },
+        {
+          "start": 133.4616,
+          "end": 136.5835,
+          "label": "speech"
+        },
+        {
+          "start": 136.5835,
+          "end": 137.2753,
+          "label": "non_speech"
+        },
+        {
+          "start": 137.2753,
+          "end": 139.6547,
+          "label": "speech"
+        },
+        {
+          "start": 139.6547,
+          "end": 140.5322,
+          "label": "non_speech"
+        },
+        {
+          "start": 140.5322,
+          "end": 148.3622,
+          "label": "speech"
+        },
+        {
+          "start": 148.3622,
+          "end": 149.2735,
+          "label": "non_speech"
+        },
+        {
+          "start": 149.2735,
+          "end": 149.9147,
+          "label": "speech"
+        },
+        {
+          "start": 149.9147,
+          "end": 151.096,
+          "label": "non_speech"
+        },
+        {
+          "start": 151.096,
+          "end": 154.0997,
+          "label": "speech"
+        },
+        {
+          "start": 154.0997,
+          "end": 154.2347,
+          "label": "non_speech"
+        },
+        {
+          "start": 154.2347,
+          "end": 156.3778,
+          "label": "speech"
+        },
+        {
+          "start": 156.3778,
+          "end": 156.9685,
+          "label": "non_speech"
+        },
+        {
+          "start": 156.9685,
+          "end": 157.036,
+          "label": "speech"
+        },
+        {
+          "start": 157.036,
+          "end": 157.1541,
+          "label": "non_speech"
+        },
+        {
+          "start": 157.1541,
+          "end": 158.2678,
+          "label": "speech"
+        },
+        {
+          "start": 158.2678,
+          "end": 159.7528,
+          "label": "non_speech"
+        },
+        {
+          "start": 159.7528,
+          "end": 162.841,
+          "label": "speech"
+        },
+        {
+          "start": 162.841,
+          "end": 163.6847,
+          "label": "non_speech"
+        },
+        {
+          "start": 163.6847,
+          "end": 165.136,
+          "label": "speech"
+        },
+        {
+          "start": 165.136,
+          "end": 165.8785,
+          "label": "non_speech"
+        },
+        {
+          "start": 165.8785,
+          "end": 181.6228,
+          "label": "speech"
+        },
+        {
+          "start": 181.6228,
+          "end": 182.2641,
+          "label": "non_speech"
+        },
+        {
+          "start": 182.2641,
+          "end": 183.361,
+          "label": "speech"
+        },
+        {
+          "start": 183.361,
+          "end": 184.4578,
+          "label": "non_speech"
+        },
+        {
+          "start": 184.4578,
+          "end": 185.9597,
+          "label": "speech"
+        },
+        {
+          "start": 185.9597,
+          "end": 186.8541,
+          "label": "non_speech"
+        },
+        {
+          "start": 186.8541,
+          "end": 191.8491,
+          "label": "speech"
+        },
+        {
+          "start": 191.8491,
+          "end": 193.0303,
+          "label": "non_speech"
+        },
+        {
+          "start": 193.0303,
+          "end": 193.7391,
+          "label": "speech"
+        },
+        {
+          "start": 193.7391,
+          "end": 194.2285,
+          "label": "non_speech"
+        },
+        {
+          "start": 194.2285,
+          "end": 195.1566,
+          "label": "speech"
+        },
+        {
+          "start": 195.1566,
+          "end": 195.9835,
+          "label": "non_speech"
+        },
+        {
+          "start": 195.9835,
+          "end": 199.1897,
+          "label": "speech"
+        },
+        {
+          "start": 199.1897,
+          "end": 199.9828,
+          "label": "non_speech"
+        },
+        {
+          "start": 199.9828,
+          "end": 201.991,
+          "label": "speech"
+        },
+        {
+          "start": 201.991,
+          "end": 203.1047,
+          "label": "non_speech"
+        },
+        {
+          "start": 203.1047,
+          "end": 206.1591,
+          "label": "speech"
+        },
+        {
+          "start": 206.1591,
+          "end": 206.3616,
+          "label": "non_speech"
+        },
+        {
+          "start": 206.3616,
+          "end": 208.5553,
+          "label": "speech"
+        },
+        {
+          "start": 208.5553,
+          "end": 209.2978,
+          "label": "non_speech"
+        },
+        {
+          "start": 209.2978,
+          "end": 212.4872,
+          "label": "speech"
+        },
+        {
+          "start": 212.4872,
+          "end": 212.5041,
+          "label": "non_speech"
+        },
+        {
+          "start": 212.5041,
+          "end": 212.521,
+          "label": "speech"
+        },
+        {
+          "start": 212.521,
+          "end": 212.8078,
+          "label": "non_speech"
+        },
+        {
+          "start": 212.8078,
+          "end": 224.266,
+          "label": "speech"
+        },
+        {
+          "start": 224.266,
+          "end": 225.2616,
+          "label": "non_speech"
+        },
+        {
+          "start": 225.2616,
+          "end": 230.2228,
+          "label": "speech"
+        },
+        {
+          "start": 230.2228,
+          "end": 230.4253,
+          "label": "non_speech"
+        },
+        {
+          "start": 230.4253,
+          "end": 231.9272,
+          "label": "speech"
+        },
+        {
+          "start": 231.9272,
+          "end": 232.1803,
+          "label": "non_speech"
+        },
+        {
+          "start": 232.1803,
+          "end": 242.2547,
+          "label": "speech"
+        },
+        {
+          "start": 242.2547,
+          "end": 243.1491,
+          "label": "non_speech"
+        },
+        {
+          "start": 243.1491,
+          "end": 244.921,
+          "label": "speech"
+        },
+        {
+          "start": 244.921,
+          "end": 246.3553,
+          "label": "non_speech"
+        },
+        {
+          "start": 246.3553,
+          "end": 247.2835,
+          "label": "speech"
+        },
+        {
+          "start": 247.2835,
+          "end": 247.5703,
+          "label": "non_speech"
+        },
+        {
+          "start": 247.5703,
+          "end": 256.1428,
+          "label": "speech"
+        },
+        {
+          "start": 256.1428,
+          "end": 256.666,
+          "label": "non_speech"
+        },
+        {
+          "start": 256.666,
+          "end": 261.4247,
+          "label": "speech"
+        },
+        {
+          "start": 261.4247,
+          "end": 261.8466,
+          "label": "non_speech"
+        },
+        {
+          "start": 261.8466,
+          "end": 283.5647,
+          "label": "speech"
+        },
+        {
+          "start": 283.5647,
+          "end": 284.341,
+          "label": "non_speech"
+        },
+        {
+          "start": 284.341,
+          "end": 288.0366,
+          "label": "speech"
+        },
+        {
+          "start": 288.0366,
+          "end": 288.7116,
+          "label": "non_speech"
+        },
+        {
+          "start": 288.7116,
+          "end": 292.441,
+          "label": "speech"
+        },
+        {
+          "start": 292.441,
+          "end": 292.9135,
+          "label": "non_speech"
+        },
+        {
+          "start": 292.9135,
+          "end": 294.3985,
+          "label": "speech"
+        },
+        {
+          "start": 294.3985,
+          "end": 294.7866,
+          "label": "non_speech"
+        },
+        {
+          "start": 294.7866,
+          "end": 298.5835,
+          "label": "speech"
+        },
+        {
+          "start": 298.5835,
+          "end": 298.9716,
+          "label": "non_speech"
+        },
+        {
+          "start": 298.9716,
+          "end": 300.0853,
+          "label": "speech"
+        },
+        {
+          "start": 300.0853,
+          "end": 300.811,
+          "label": "non_speech"
+        },
+        {
+          "start": 300.811,
+          "end": 304.1353,
+          "label": "speech"
+        },
+        {
+          "start": 304.1353,
+          "end": 304.6753,
+          "label": "non_speech"
+        },
+        {
+          "start": 304.6753,
+          "end": 307.1897,
+          "label": "speech"
+        },
+        {
+          "start": 307.1897,
+          "end": 308.6578,
+          "label": "non_speech"
+        },
+        {
+          "start": 308.6578,
+          "end": 326.6466,
+          "label": "speech"
+        },
+        {
+          "start": 326.6466,
+          "end": 327.9966,
+          "label": "non_speech"
+        },
+        {
+          "start": 327.9966,
+          "end": 329.8191,
+          "label": "speech"
+        },
+        {
+          "start": 329.8191,
+          "end": 330.0891,
+          "label": "non_speech"
+        },
+        {
+          "start": 330.0891,
+          "end": 330.2578,
+          "label": "speech"
+        },
+        {
+          "start": 330.2578,
+          "end": 330.511,
+          "label": "non_speech"
+        },
+        {
+          "start": 330.511,
+          "end": 338.0541,
+          "label": "speech"
+        },
+        {
+          "start": 338.0541,
+          "end": 338.7122,
+          "label": "non_speech"
+        },
+        {
+          "start": 338.7122,
+          "end": 347.1666,
+          "label": "speech"
+        },
+        {
+          "start": 347.1666,
+          "end": 347.5041,
+          "label": "non_speech"
+        },
+        {
+          "start": 347.5041,
+          "end": 348.9891,
+          "label": "speech"
+        },
+        {
+          "start": 348.9891,
+          "end": 349.9678,
+          "label": "non_speech"
+        },
+        {
+          "start": 349.9678,
+          "end": 352.2797,
+          "label": "speech"
+        },
+        {
+          "start": 352.2797,
+          "end": 352.7353,
+          "label": "non_speech"
+        },
+        {
+          "start": 352.7353,
+          "end": 354.6253,
+          "label": "speech"
+        },
+        {
+          "start": 354.6253,
+          "end": 354.7335,
+          "label": "non_speech"
+        }
+      ]
+    }
+  ]
+}

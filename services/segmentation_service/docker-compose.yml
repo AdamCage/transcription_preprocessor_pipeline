@@ -1,0 +1,25 @@
+services:
+  segmentation:
+    build:
+      context: .
+      args:
+        SEG_HF_TOKEN: ${SEG_HF_TOKEN}
+    ports:
+      - "8001:8001"
+    env_file: .env
+    environment:
+      - SEG_DEVICE=cuda:0
+      - SEG_MAX_CONCURRENCY=24
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3

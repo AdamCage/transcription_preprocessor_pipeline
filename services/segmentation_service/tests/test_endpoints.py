@@ -30,7 +30,6 @@ def client(fake_pyannote_pipeline):
         hf_token="",
         device="cpu",
         max_concurrency=4,
-        executor_workers=1,
     )
     from segmentation_service.app import _build_app
 

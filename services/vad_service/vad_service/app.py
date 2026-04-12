@@ -3,17 +3,35 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import logging
+import time
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
+import numpy as np
+import soundfile as sf
 import torch
 from fastapi import FastAPI, Form, HTTPException, UploadFile
+from fastapi.responses import Response
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from vad_service.config import ServiceConfig, get_config
 from vad_service.inference import SileroVADGPU
-from vad_service.models import HealthResponse, RefineRequest, RefineResponse
+from vad_service.metrics import (
+    GPU_MEM_BYTES,
+    REQUEST_COUNT,
+    REQUEST_LATENCY,
+    SPANS_IN,
+    SPANS_OUT,
+)
+from vad_service.models import (
+    HealthResponse,
+    RefineRequest,
+    RefineResponse,
+    TimeSpanIn,
+)
 
 log = logging.getLogger(__name__)
 
@@ -38,17 +56,33 @@ def _build_app(config: ServiceConfig | None = None) -> FastAPI:
         vad = SileroVADGPU(
             device=config.device,
             executor_workers=config.executor_workers,
+            model_path=config.model_path,
         )
         vad.load()
+
+        # Warm-up: force JIT compilation and CUDA context init
+        _warmup_t0 = time.perf_counter()
+        dummy = np.zeros(16000, dtype=np.float32)
+        buf = io.BytesIO()
+        sf.write(buf, dummy, 16000, format="WAV")
+        vad.refine(buf.getvalue(), [TimeSpanIn(start=0.0, end=1.0)])
+        log.info("Warm-up complete in %.2fs", time.perf_counter() - _warmup_t0)
+
         _app.state.vad = vad
         _app.state.sem = asyncio.Semaphore(config.max_concurrency)
         _app.state.config = config
         log.info(
-            "VAD service ready | device=%s | max_concurrency=%d",
+            "VAD service ready | device=%s | workers=%d | max_concurrency=%d",
             vad.device,
+            config.executor_workers,
             config.max_concurrency,
         )
         yield
+
+        # Graceful shutdown: drain in-flight requests by acquiring all permits
+        sem: asyncio.Semaphore = _app.state.sem
+        for _ in range(config.max_concurrency):
+            await sem.acquire()
         vad.shutdown()
         log.info("VAD service shut down")
 
@@ -65,47 +99,85 @@ def _build_app(config: ServiceConfig | None = None) -> FastAPI:
 
         Accepts multipart form: ``audio`` file + ``request`` JSON string.
         """
+        t0 = time.perf_counter()
+        status_label = "ok"
+
         ct = (audio.content_type or "").lower()
         if ct and ct not in _AUDIO_CONTENT_TYPES:
+            REQUEST_COUNT.labels(status="invalid_content_type").inc()
             raise HTTPException(
                 status_code=422,
                 detail=f"Unsupported content type: {ct}. Send audio/wav or similar.",
             )
         raw = await audio.read()
         if not raw:
+            REQUEST_COUNT.labels(status="empty_payload").inc()
             raise HTTPException(status_code=422, detail="Empty audio payload")
+
+        max_bytes = int(config.max_audio_size_mb * 1024 * 1024)
+        if len(raw) > max_bytes:
+            REQUEST_COUNT.labels(status="payload_too_large").inc()
+            raise HTTPException(
+                status_code=413,
+                detail=(
+                    f"Audio payload too large: {len(raw) / 1024**2:.1f} MB "
+                    f"exceeds limit of {config.max_audio_size_mb} MB"
+                ),
+            )
 
         try:
             req = RefineRequest.model_validate(json.loads(request))
         except Exception as exc:
+            REQUEST_COUNT.labels(status="invalid_json").inc()
             raise HTTPException(
                 status_code=422,
                 detail=f"Invalid request JSON: {exc}",
             ) from exc
 
         if not req.spans:
+            REQUEST_COUNT.labels(status="ok").inc()
             return RefineResponse(spans=[])
+
+        SPANS_IN.inc(len(req.spans))
 
         sem: asyncio.Semaphore = app.state.sem
         try:
             async with sem:
                 vad: SileroVADGPU = app.state.vad
-                refined = await vad.refine_async(
-                    raw,
-                    req.spans,
-                    threshold=req.threshold,
-                    min_speech_duration_ms=req.min_speech_duration_ms,
-                    min_silence_duration_ms=req.min_silence_duration_ms,
-                    speech_pad_ms=req.speech_pad_ms,
-                    merge_gap_seconds=req.merge_gap_seconds,
+                refined = await asyncio.wait_for(
+                    vad.refine_async(
+                        raw,
+                        req.spans,
+                        threshold=req.threshold,
+                        min_speech_duration_ms=req.min_speech_duration_ms,
+                        min_silence_duration_ms=req.min_silence_duration_ms,
+                        speech_pad_ms=req.speech_pad_ms,
+                        merge_gap_seconds=req.merge_gap_seconds,
+                    ),
+                    timeout=config.inference_timeout_sec,
                 )
+        except asyncio.TimeoutError:
+            status_label = "timeout"
+            log.error(
+                "VAD inference timed out after %.0fs", config.inference_timeout_sec,
+            )
+            raise HTTPException(
+                status_code=504,
+                detail=f"Inference timed out after {config.inference_timeout_sec}s",
+            )
         except RuntimeError as exc:
+            status_label = "error"
             log.exception("VAD inference failed")
             raise HTTPException(status_code=500, detail=str(exc)) from exc
         except Exception as exc:
+            status_label = "error"
             log.exception("Unexpected VAD error")
             raise HTTPException(status_code=500, detail=str(exc)) from exc
+        finally:
+            REQUEST_COUNT.labels(status=status_label).inc()
+            REQUEST_LATENCY.observe(time.perf_counter() - t0)
 
+        SPANS_OUT.inc(len(refined))
         return RefineResponse(spans=refined)
 
     @app.get("/health", response_model=HealthResponse)
@@ -116,8 +188,12 @@ def _build_app(config: ServiceConfig | None = None) -> FastAPI:
         if torch.cuda.is_available():
             try:
                 idx = int(vad.device.split(":")[-1]) if ":" in vad.device else 0
-                gpu_used = round(torch.cuda.memory_allocated(idx) / 1024**2, 1)
-                gpu_total = round(torch.cuda.get_device_properties(idx).total_mem / 1024**2, 1)
+                mem_alloc = torch.cuda.memory_allocated(idx)
+                GPU_MEM_BYTES.set(mem_alloc)
+                gpu_used = round(mem_alloc / 1024**2, 1)
+                gpu_total = round(
+                    torch.cuda.get_device_properties(idx).total_mem / 1024**2, 1,
+                )
             except Exception:  # noqa: BLE001
                 pass
         return HealthResponse(
@@ -126,6 +202,13 @@ def _build_app(config: ServiceConfig | None = None) -> FastAPI:
             device=vad.device,
             gpu_memory_used_mb=gpu_used,
             gpu_memory_total_mb=gpu_total,
+        )
+
+    @app.get("/metrics")
+    async def metrics() -> Response:
+        return Response(
+            content=generate_latest(),
+            media_type=CONTENT_TYPE_LATEST,
         )
 
     return app

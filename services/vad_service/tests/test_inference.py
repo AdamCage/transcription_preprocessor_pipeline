@@ -76,9 +76,22 @@ class TestSileroVADGPU:
         result = vad.refine(sample_wav_bytes, spans)
         assert len(result) >= 1
 
+    def test_model_pool_returns_replica(self, fake_silero_model):
+        """After refine(), the model replica is returned to the pool."""
+        vad = SileroVADGPU(device="cpu", executor_workers=2)
+        vad.load()
+        assert vad._model_pool.qsize() == 2
+
+    def test_reset_states_called(self, sample_wav_bytes, fake_silero_model):
+        """reset_states() is called before every inference."""
+        vad = SileroVADGPU(device="cpu", executor_workers=1)
+        vad.load()
+        vad.refine(sample_wav_bytes, [TimeSpanIn(start=0.0, end=1.0)])
+        model, _ = vad._model_pool.get()
+        model.reset_states.assert_called()
+
     def test_shutdown(self, fake_silero_model):
         vad = SileroVADGPU(device="cpu", executor_workers=1)
         vad.load()
         vad.shutdown()
-        assert vad._model is None
-        assert vad._get_speech_timestamps is None
+        assert vad._model_pool.empty()

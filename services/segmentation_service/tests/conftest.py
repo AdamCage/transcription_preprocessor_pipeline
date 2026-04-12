@@ -42,7 +42,7 @@ def empty_wav_bytes() -> bytes:
 
 
 class FakePyannoteOutput:
-    """Mimics pyannote Timeline/Annotation .itertracks() output."""
+    """Mimics pyannote Annotation .itertracks() output."""
 
     def __init__(self, tracks: list[tuple[float, float]]) -> None:
         self._tracks = tracks
@@ -57,29 +57,41 @@ class FakePyannoteOutput:
 
 @pytest.fixture()
 def fake_pyannote_pipeline(monkeypatch):
-    """Monkeypatch pyannote Pipeline so no real model is loaded."""
+    """Monkeypatch pyannote Model + VoiceActivityDetection so no real model is loaded."""
     tracks = [(0.1, 0.5), (0.8, 1.0)]
     output = FakePyannoteOutput(tracks)
 
-    class FakePipeline:
+    class _FakeModel:
         @classmethod
         def from_pretrained(cls, *args, **kwargs):
             return cls()
 
-        def to(self, device):
+        def to(self, *a):
             return self
+
+    class _FakeVADPipeline:
+        def __init__(self, segmentation=None, **kw):
+            pass
+
+        def instantiate(self, params):
+            pass
 
         def __call__(self, audio_input):
             return output
 
-    monkeypatch.setattr(
-        "segmentation_service.inference.Pipeline",
-        FakePipeline,
-        raising=False,
-    )
     import sys
 
-    fake_module = MagicMock()
-    fake_module.Pipeline = FakePipeline
-    monkeypatch.setitem(sys.modules, "pyannote.audio", fake_module)
-    return FakePipeline, tracks
+    fake_audio = MagicMock()
+    fake_audio.Model = _FakeModel
+    fake_pipelines = MagicMock()
+    fake_pipelines.VoiceActivityDetection = _FakeVADPipeline
+    fake_audio.pipelines = fake_pipelines
+    fake_audio.pipelines.VoiceActivityDetection = _FakeVADPipeline
+
+    monkeypatch.setitem(sys.modules, "pyannote", MagicMock())
+    monkeypatch.setitem(sys.modules, "pyannote.audio", fake_audio)
+    monkeypatch.setitem(sys.modules, "pyannote.audio.pipelines", fake_pipelines)
+    monkeypatch.setitem(sys.modules, "pyannote.audio.core", MagicMock())
+    monkeypatch.setitem(sys.modules, "pyannote.audio.core.pipeline", MagicMock())
+
+    return _FakeVADPipeline, tracks

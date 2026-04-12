@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
-
 import pytest
 
 from segmentation_service.inference import PyannoteSegmenter
@@ -11,17 +9,13 @@ from segmentation_service.inference import PyannoteSegmenter
 
 class TestPyannoteSegmenter:
     def test_segment_not_loaded_raises(self, sample_wav_bytes):
-        seg = PyannoteSegmenter(
-            model_name="test", device="cpu", hf_token="", executor_workers=1
-        )
+        seg = PyannoteSegmenter(model_name="test", device="cpu", hf_token="")
         with pytest.raises(RuntimeError, match="not loaded"):
             seg.segment(sample_wav_bytes)
 
     def test_segment_with_fake_pipeline(self, sample_wav_bytes, fake_pyannote_pipeline):
-        _FakePipeline, tracks = fake_pyannote_pipeline
-        seg = PyannoteSegmenter(
-            model_name="test", device="cpu", hf_token="", executor_workers=1
-        )
+        _FakeVAD, tracks = fake_pyannote_pipeline
+        seg = PyannoteSegmenter(model_name="test", device="cpu", hf_token="")
         seg.load()
         segments, duration = seg.segment(sample_wav_bytes)
 
@@ -32,9 +26,7 @@ class TestPyannoteSegmenter:
             assert s.start < s.end
 
     def test_segment_fills_gaps_with_non_speech(self, sample_wav_bytes, fake_pyannote_pipeline):
-        seg = PyannoteSegmenter(
-            model_name="test", device="cpu", hf_token="", executor_workers=1
-        )
+        seg = PyannoteSegmenter(model_name="test", device="cpu", hf_token="")
         seg.load()
         segments, duration = seg.segment(sample_wav_bytes)
 
@@ -42,9 +34,7 @@ class TestPyannoteSegmenter:
         assert len(non_speech) >= 1
 
     def test_shutdown_clears_pipeline(self, fake_pyannote_pipeline):
-        seg = PyannoteSegmenter(
-            model_name="test", device="cpu", hf_token="", executor_workers=1
-        )
+        seg = PyannoteSegmenter(model_name="test", device="cpu", hf_token="")
         seg.load()
         seg.shutdown()
         assert seg._pipeline is None
@@ -53,12 +43,10 @@ class TestPyannoteSegmenter:
         """When pyannote returns no tracks, fall back to full-file speech."""
         from tests.conftest import FakePyannoteOutput
 
-        _FakePipeline, _ = fake_pyannote_pipeline
-        _FakePipeline.__call__ = lambda self, x: FakePyannoteOutput([])
-
-        seg = PyannoteSegmenter(
-            model_name="test", device="cpu", hf_token="", executor_workers=1
-        )
+        seg = PyannoteSegmenter(model_name="test", device="cpu", hf_token="")
         seg.load()
+        # Replace the pipeline's __call__ to return empty output
+        seg._pipeline.__class__.__call__ = lambda self, x: FakePyannoteOutput([])
+
         segments, _ = seg.segment(empty_wav_bytes)
         assert any(s.label == "speech" for s in segments)

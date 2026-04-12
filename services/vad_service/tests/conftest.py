@@ -32,12 +32,10 @@ def short_wav_bytes() -> bytes:
     return buf.getvalue()
 
 
-@pytest.fixture()
-def fake_silero_model(monkeypatch):
-    """Monkeypatch torch.hub.load to return a fake Silero VAD model."""
+def _make_fake_silero_pair():
+    """Build a (fake_model, fake_get_speech_timestamps) pair."""
 
     def fake_get_speech_timestamps(wav_tensor, model, **kwargs):
-        sr = kwargs.get("sampling_rate", 16000)
         n_samples = wav_tensor.shape[0]
         if n_samples < 100:
             return []
@@ -49,9 +47,22 @@ def fake_silero_model(monkeypatch):
     fake_model = MagicMock()
     fake_model.to = MagicMock(return_value=fake_model)
     fake_model.eval = MagicMock(return_value=fake_model)
+    fake_model.reset_states = MagicMock()
 
+    return fake_model, fake_get_speech_timestamps
+
+
+@pytest.fixture()
+def fake_silero_model(monkeypatch):
+    """Monkeypatch torch.hub.load to return a fake Silero VAD model.
+
+    Each call to ``torch.hub.load`` returns a fresh pair so that the
+    model-pool in ``SileroVADGPU`` gets independent replicas.
+    """
     def fake_hub_load(*args, **kwargs):
-        return fake_model, [fake_get_speech_timestamps]
+        model, get_ts = _make_fake_silero_pair()
+        return model, [get_ts]
 
     monkeypatch.setattr("torch.hub.load", fake_hub_load)
-    return fake_model, fake_get_speech_timestamps
+    pair = _make_fake_silero_pair()
+    return pair[0], pair[1]
