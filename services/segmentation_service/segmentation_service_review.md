@@ -29,7 +29,7 @@ tests/
   test_models.py       # Pydantic schema validation
   test_inference.py    # PyannoteSegmenter unit tests
   test_endpoints.py    # E2E FastAPI TestClient tests
-pyproject.toml         # hatchling build, pyannote.audio>=3.3, torch cu124 index
+pyproject.toml         # hatchling build, pyannote.audio>=3.3,<3.5, torch cu121 index (2.5.1)
 ```
 
 Request flow:

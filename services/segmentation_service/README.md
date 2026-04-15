@@ -27,6 +27,15 @@ export SEG_MODEL_PATH="/path/to/models--pyannote--segmentation-3.0/snapshots/<ha
 uvicorn segmentation_service.app:app --host 0.0.0.0 --port 8001
 ```
 
+### pip
+
+`requirements.txt` is exported from `uv.lock` (production deps only). It includes `--extra-index-url` for PyTorch **CUDA 12.1** wheels (`+cu121`).
+
+```bash
+pip install -r requirements.txt
+pip install .
+```
+
 ## Configuration
 
 All settings are via environment variables (prefix `SEG_`):

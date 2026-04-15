@@ -9,9 +9,9 @@ dependencies = [
     "uvicorn[standard]>=0.30.0",
     "pydantic>=2.5.0",
     "pydantic-settings>=2.2.0",
-    "pyannote.audio>=3.3.0",
-    "torch>=2.1.0",
-    "torchaudio>=2.1.0",
+    "pyannote.audio>=3.3.0,<3.5",
+    "torch==2.5.1",
+    "torchaudio==2.5.1",
     "soundfile>=0.12.1",
     "numpy>=1.26.0",
     "python-multipart>=0.0.9",
@@ -29,13 +29,12 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["segmentation_service"]
 
-# PyTorch CUDA wheels live on a separate index.
-# `uv sync` will pull GPU-enabled torch from here when available.
+# PyTorch CUDA wheels: cu121 lowers minimum NVIDIA driver vs cu124/cu126.
 [[tool.uv.index]]
-name = "pytorch-cu124"
-url = "https://download.pytorch.org/whl/cu124"
+name = "pytorch-cu121"
+url = "https://download.pytorch.org/whl/cu121"
 explicit = true
 
 [tool.uv.sources]
-torch = { index = "pytorch-cu124" }
-torchaudio = { index = "pytorch-cu124" }
+torch = { index = "pytorch-cu121" }
+torchaudio = { index = "pytorch-cu121" }
